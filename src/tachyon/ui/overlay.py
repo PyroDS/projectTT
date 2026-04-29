@@ -36,6 +36,12 @@ from tachyon.ui.widgets import PulseIndicator
 logger = logging.getLogger(__name__)
 
 
+_PLACEHOLDER_TEXT: str = (
+    "Tachyon — live captions will appear here while recording.\n"
+    "Drag to reposition  ·  Right-click the tray icon to control."
+)
+
+
 class CaptionOverlay:
     """Always-on-top caption overlay window with expand/collapse and close.
 
@@ -96,9 +102,15 @@ class CaptionOverlay:
         self._build_widgets()
         self._bind_drag_events()
 
+        # Show placeholder text so the overlay has visible body before any
+        # captions arrive — otherwise the window collapses to a hard-to-grab
+        # ~1px stripe under the title bar.
+        self._show_placeholder()
+
         # Position the window (needs to happen after widgets are laid out)
         self._root.update_idletasks()
         self._apply_position()
+        self._recalc_collapsed_height()
 
         # Show the window now that everything is ready
         self._root.deiconify()
@@ -367,13 +379,7 @@ class CaptionOverlay:
         self._expanded_frame.pack_forget()
         self._caption_label.pack(fill=tk.BOTH, expand=True)
 
-        # Resize window back to collapsed dimensions
-        cur_x: int = self._root.winfo_x()
-        cur_y: int = self._root.winfo_y()
-        self._root.update_idletasks()
-        label_h: int = self._caption_label.winfo_reqheight()
-        total_h: int = Dim.titlebar_height + max(label_h, 1)
-        self._root.geometry(f"{Dim.overlay_width}x{total_h}+{cur_x}+{cur_y}")
+        self._recalc_collapsed_height()
 
     def _repopulate_text_widget(self) -> None:
         """Fill the text widget with all segments from history."""
@@ -512,23 +518,45 @@ class CaptionOverlay:
     def _update_collapsed_display(self) -> None:
         """Refresh the caption label with the current lines (collapsed view)."""
         if not self._lines:
-            self._caption_label.configure(text="")
-            return
-
-        formatted: List[str] = []
-        for seg in self._lines:
-            formatted.append(f"{seg.speaker}: {seg.text}")
-
-        self._caption_label.configure(text="\n".join(formatted))
+            self._show_placeholder()
+        else:
+            formatted: List[str] = [
+                f"{seg.speaker}: {seg.text}" for seg in self._lines
+            ]
+            self._caption_label.configure(
+                text="\n".join(formatted),
+                fg=Color.fg_bright,
+            )
 
         if not self._expanded:
-            # Recalculate window height for collapsed mode
-            self._root.update_idletasks()
-            label_h: int = self._caption_label.winfo_reqheight()
-            total_h: int = Dim.titlebar_height + label_h
-            cur_x: int = self._root.winfo_x()
-            cur_y: int = self._root.winfo_y()
-            self._root.geometry(f"{Dim.overlay_width}x{total_h}+{cur_x}+{cur_y}")
+            self._recalc_collapsed_height()
+
+    def _show_placeholder(self) -> None:
+        """Fill the caption label with muted placeholder copy.
+
+        Used at startup and whenever ``clear_history()`` empties the
+        line buffer — keeps the overlay visually present and draggable
+        even when there's no live transcription to show.  Does not
+        touch geometry; pair with :meth:`_recalc_collapsed_height` if
+        the window size needs to be updated.
+        """
+        self._caption_label.configure(
+            text=_PLACEHOLDER_TEXT,
+            fg=Color.fg_muted,
+        )
+
+    def _recalc_collapsed_height(self) -> None:
+        """Resize the (collapsed) window to fit the caption label content."""
+        if self._expanded:
+            return
+        self._root.update_idletasks()
+        label_h: int = self._caption_label.winfo_reqheight()
+        total_h: int = Dim.titlebar_height + max(label_h, 1)
+        cur_x: int = self._root.winfo_x()
+        cur_y: int = self._root.winfo_y()
+        self._root.geometry(
+            f"{Dim.overlay_width}x{total_h}+{cur_x}+{cur_y}"
+        )
 
     def _append_new_segments_to_text(
         self, segments: List[TranscriptSegment],
@@ -619,7 +647,9 @@ class CaptionOverlay:
         self._lines.clear()
         self._speaker_color_map.clear()
         self._next_speaker_color_idx = 0
-        self._caption_label.configure(text="")
+        self._show_placeholder()
+        if not self._expanded:
+            self._recalc_collapsed_height()
 
         # Clear text widget
         self._text_widget.configure(state=tk.NORMAL)

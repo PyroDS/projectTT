@@ -4,7 +4,7 @@ A 100% local, Windows-only meeting transcription tool. Captures your microphone 
 
 Nothing leaves your machine.
 
-> **Legal notice — please read before using.** Tachyon Transcripts is a recording tool. Recording other people without their knowledge or consent is illegal in many jurisdictions. **You are responsible for complying with the laws that apply to you.** See [docs/LEGAL.md](docs/LEGAL.md) and the first-run wizard's consent page for the details. The app will not let you start a recording until you have acknowledged the disclaimer.
+> **Legal notice — please read before using.** Tachyon Transcripts is a recording tool. Recording other people without their knowledge or consent is illegal in many jurisdictions. **We are not lawyers and nothing in this project is legal advice. You are solely responsible for checking the laws that apply to you and using this software lawfully.** See [docs/LEGAL.md](docs/LEGAL.md) and the first-run wizard's consent page for a non-lawyer overview of the questions to ask. The app will not let you start a recording until you have acknowledged the disclaimer.
 
 ## Why this exists
 
@@ -119,11 +119,15 @@ All settings live in `config.json` (next to the app). Relevant keys:
 
 ## Legal
 
-Tachyon Transcripts is a tool. What you use it for is your responsibility.
+**We are not lawyers, and nothing in this README, in [docs/LEGAL.md](docs/LEGAL.md), in the installer, or in the first-run wizard is legal advice.** Tachyon Transcripts is open-source software released publicly to anyone who wants it. What you use it for, where you use it, and who you record is entirely your responsibility.
 
-United States federal law uses a one-party-consent rule, but eleven states (California, Connecticut, Florida, Illinois, Maryland, Massachusetts, Michigan, Montana, Nevada, New Hampshire, Pennsylvania, Washington) require all-party consent. The EU's GDPR, the UK Data Protection Act, Canadian PIPEDA, and most other data-protection regimes apply to recordings that contain identifiable voices. Employer policies, employment contracts, labour law, and meeting-platform ToS may further restrict recording even where it would otherwise be legal.
+Recording laws vary widely by country, state, and even municipality, and they change over time. Some places require all-party consent; some have one-party consent; some have rules that depend on whether the conversation is "private," whether you are a party to it, what platform it is on, your relationship to the other participants, or whether your employer or industry has its own policy. We cannot tell you what applies to your situation — only a lawyer in your jurisdiction can.
 
-The full text is at [docs/LEGAL.md](docs/LEGAL.md) and is displayed in the installer and the first-run wizard. If you are unsure whether you may legally record a specific conversation, do not record it.
+**Before recording anything, check the laws, contracts, employer policies, and platform terms of service that apply to you.** If you are unsure, do not record. By downloading, building, installing, or using this software you accept full responsibility for compliance with all applicable rules and agree that the authors and contributors are not liable for how you use it.
+
+A longer (still non-lawyer) overview of the kinds of questions to ask is in [docs/LEGAL.md](docs/LEGAL.md), and an abbreviated version is shown in the installer and the first-run wizard. Treat any of it as a starting point for your own research, not as a substitute for legal advice.
+
+The software is provided "as is" with no warranty of any kind — see [LICENSE](LICENSE).
 
 ## Contributing
 

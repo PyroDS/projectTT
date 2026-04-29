@@ -35,6 +35,72 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-29 — README legal section: stronger non-lawyer disclaimer
+
+**What was done:**
+- Rewrote the **Legal** section of `README.md` to lead with an
+  explicit "we are not lawyers, nothing here is legal advice"
+  disclaimer, given the app is being released publicly. Removed the
+  prior paragraph that listed specific US states and named GDPR /
+  PIPEDA / etc. by jurisdiction — that read like advice, and the
+  longer overview already lives in `docs/LEGAL.md` with its own
+  non-advice header.
+- The new section says, plainly: laws vary by country, state, and
+  municipality and change over time; the user is solely responsible
+  for checking what applies to them; by using the software they
+  accept that responsibility and that the authors disclaim
+  liability.
+- Tightened the top-of-README legal callout to match — added "we
+  are not lawyers and nothing in this project is legal advice" and
+  reframed the link to LEGAL.md as "a non-lawyer overview of the
+  questions to ask" rather than "the details," so the doc isn't
+  implied to be authoritative.
+- `docs/LEGAL.md` was left as-is — it already opens with "This
+  document is not legal advice" and explicitly recommends
+  consulting a lawyer.
+
+**Files changed:**
+- `README.md` — top legal callout + `## Legal` section.
+
+### 2026-04-29 — Caption overlay placeholder (no more idle pinstripe)
+
+**What was done:**
+- The caption overlay collapses to a ~1px stripe under the title bar
+  whenever the line buffer is empty — which is the case at app launch
+  before any recording, and briefly at the start of every new
+  recording (after `clear_history()` clears the buffer). That stripe
+  was hard to grab for dragging and visually noisy without conveying
+  any state.
+- Added a muted-color placeholder that fills the body whenever
+  `_lines` is empty:
+  ```
+  Tachyon — live captions will appear here while recording.
+  Drag to reposition  ·  Right-click the tray icon to control.
+  ```
+  Rendered in `Color.fg_muted` so it reads visually as "waiting"
+  rather than as a real caption.
+- Factored the height-recalc logic out of `_update_collapsed_display`
+  and `_collapse` into a single `_recalc_collapsed_height` helper.
+  `_show_placeholder` only touches text/color so it can be called
+  before the window has been positioned, and the init sequence now
+  shows placeholder → applies position → recalcs height in that order
+  so the bottom-margin offset is right on first paint.
+- `_clear_history_impl` now reinstates the placeholder instead of
+  leaving the body empty.
+
+**Why this matters:**
+- Smoke testing on Windows (and especially in the VM where startup is
+  long) revealed the empty overlay as a confusing artefact: a tall,
+  draggable bar would be expected, but instead the user saw a sliver
+  that looked broken. The placeholder also serves as a discoverability
+  cue for the drag and tray-menu controls.
+
+**Files touched:**
+- `src/tachyon/ui/overlay.py` — `_PLACEHOLDER_TEXT` module constant;
+  `_show_placeholder` / `_recalc_collapsed_height` helpers; init,
+  `_update_collapsed_display`, `_clear_history_impl`, and `_collapse`
+  rewired to use them.
+
 ### 2026-04-29 — Tray-first startup with live model-load status
 
 **What was done:**
