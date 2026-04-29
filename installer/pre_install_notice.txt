@@ -1,0 +1,52 @@
+Tachyon Transcripts — Important Legal Notice
+=============================================
+
+Please read the following before installing.
+
+Tachyon Transcripts is a recording and transcription tool.  Recording
+other people without their knowledge or consent may be illegal under
+the laws of your jurisdiction.
+
+IT IS YOUR RESPONSIBILITY to understand and comply with the laws
+that apply to you.  The developer makes no legal guarantees and is
+not liable for how you use this software.
+
+Key points to consider:
+
+  *  United States -- federal law is a "one-party consent" rule
+     (the recorder counts as a party), but eleven states require
+     all-party consent: California, Connecticut, Florida, Illinois,
+     Maryland, Massachusetts, Michigan, Montana, Nevada, New
+     Hampshire, Pennsylvania, and Washington.  In these states you
+     generally must have every participant's consent before
+     recording.
+
+  *  European Union / UK -- the General Data Protection Regulation
+     (GDPR) and the UK Data Protection Act apply to recordings
+     containing identifiable voices.  You typically need a lawful
+     basis (usually consent) and must inform participants.
+
+  *  Workplace meetings -- your employer's policies, employment
+     contract, and applicable labour law may prohibit recording
+     meetings.  Recording unionised workplaces may trigger
+     additional protections.
+
+  *  Meeting platforms -- Zoom, Microsoft Teams, Google Meet, Slack
+     Huddles and similar services include their own recording
+     notice rules in their Terms of Service.  Using Tachyon
+     Transcripts to bypass those notices may violate the ToS even
+     when local law would otherwise permit recording.
+
+  *  Confidential / privileged conversations -- attorney-client,
+     doctor-patient, clergy, and similar relationships are almost
+     always governed by stricter rules than general conversations.
+
+If you are unsure whether you may legally record a particular
+conversation, do not record it.
+
+When you first launch the application you will be asked to confirm
+that you have read and understood these notes.  Recording is
+disabled until you do so.
+
+By installing Tachyon Transcripts you acknowledge that you have
+read the above notice.

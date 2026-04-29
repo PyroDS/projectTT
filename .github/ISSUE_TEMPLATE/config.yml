@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Legal question about recording laws
+    url: https://github.com/PyroDS/projectTT/blob/main/docs/LEGAL.md
+    about: Please read docs/LEGAL.md first. This is not a legal-advice forum.
+  - name: Troubleshooting (first-run / install issues)
+    url: https://github.com/PyroDS/projectTT/blob/main/README.md#troubleshooting
+    about: Check the troubleshooting section of the README before filing a bug.
