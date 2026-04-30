@@ -94,7 +94,7 @@ if errorlevel 1 (
 :: missing.
 if exist requirements-lock.txt (
     echo   Using requirements-lock.txt ^(pinned^)...
-    .venv\Scripts\pip install -r requirements-lock.txt
+    .venv\Scripts\pip install --no-deps -r requirements-lock.txt
 ) else (
     echo   No lock file found, falling back to requirements.txt...
     .venv\Scripts\pip install -r requirements.txt

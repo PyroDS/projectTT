@@ -37,6 +37,27 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-30 — Source CUDA DLL discovery fix
+
+**What was done:**
+- Fixed source/dev CUDA runtime discovery in `src/tachyon/main.py`:
+  - `_register_cuda_dll_dirs()` now registers both `site-packages` and `site-packages/nvidia` as search bases.
+  - Added direct `*/bin` and `*/lib` glob patterns so normal `debug.bat`/`run.bat` launches find pip-wheel paths such as `nvidia/cublas/bin`, `nvidia/cuda_runtime/bin`, and `nvidia/cudnn/bin`.
+  - Left frozen installer lookup paths (`_internal/cuda`, `_MEIPASS`, bundled `_internal/nvidia/*`) intact.
+- Added `nvidia-cuda-runtime-cu12` to `requirements.txt` and pinned `nvidia-cuda-runtime-cu12==12.9.79` in `requirements-lock.txt` so source installs include `cudart64_12.dll`.
+- Updated `setup.bat` and `update.bat` to install the pinned transitive lock with `--no-deps`, preserving the existing `webrtcvad-wheels` + `resemblyzer --no-deps` flow and preventing pip from trying to compile source `webrtcvad`.
+
+**Decisions made:**
+- Kept the change additive to avoid changing the installer bundle layout; source and frozen installs now share the same early `os.add_dll_directory()` registration path.
+
+**Verification:**
+- Confirmed local venv has `nvidia-cuda-runtime-cu12==12.9.79`.
+- Verified the updated glob pattern discovers CUDA runtime directories from the source venv without requiring a manual PowerShell `PATH` prefix.
+
+**Issues encountered:**
+- Existing search base/pattern pairing looked under `site-packages/nvidia/nvidia/*/bin`, which missed the actual pip-wheel layout under `site-packages/nvidia/*/bin`.
+- `requirements-lock.txt` includes `Resemblyzer==0.1.4`; without `--no-deps`, pip can still follow its metadata and try to build source `webrtcvad` even though `webrtcvad-wheels` is already installed.
+
 ### 2026-04-30 — Live caption modes (Fast / Balanced / Accurate)
 
 **What was done:**

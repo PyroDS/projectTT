@@ -2,6 +2,7 @@ sounddevice>=0.4.6
 PyAudioWPatch>=0.2.12
 faster-whisper>=1.0.0
 nvidia-cublas-cu12
+nvidia-cuda-runtime-cu12
 nvidia-cudnn-cu12
 # Hardware detection — lets hardware.py's NVML path see the GPU even when
 # torch is installed CPU-only.  Tiny (<1 MB), no native deps at runtime.

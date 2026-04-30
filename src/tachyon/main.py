@@ -58,16 +58,17 @@ def _register_cuda_dll_dirs() -> None:
         _add(meipass_dir / "cuda")
 
     site_packages = (Path(sys.executable).parent / ".." / "Lib" / "site-packages").resolve()
+    _add(site_packages)
     _add(site_packages / "nvidia")
 
     search_patterns = (
         "nvidia/*/bin",
         "nvidia/*/lib",
+        "*/bin",
+        "*/lib",
         "_internal/cuda",
         "_internal/nvidia/*/bin",
         "_internal/nvidia/*/lib",
-        "nvidia/*/bin",
-        "nvidia/*/lib",
     )
 
     expanded: list[Path] = []
