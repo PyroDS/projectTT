@@ -1953,7 +1953,12 @@ class TranscriptReviewer:
     # silently pull a future release whose API or weights have changed
     # (or, in the worst case, a compromised PyPI package).  Bump this
     # constant after smoke-testing locally; do not relax to a range.
-    _PYANNOTE_PINNED_SPEC: str = "pyannote.audio==3.3.2"
+    #
+    # 3.4.0 is the last release in the pyannote.audio 3.x line.  4.x
+    # introduces breaking changes (Inference API, drops soundfile/sox
+    # backends in favor of torchcodec) that are untested against this
+    # diarizer.  Stay on 3.4.0 until 4.x is explicitly verified.
+    _PYANNOTE_PINNED_SPEC: str = "pyannote.audio==3.4.0"
 
     def _install_pyannote(self) -> None:
         """Run a pinned ``pip install`` of pyannote.audio in a background thread."""

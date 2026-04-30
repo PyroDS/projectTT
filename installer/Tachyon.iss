@@ -24,7 +24,7 @@
 
 #define MyAppName        "Tachyon Transcripts"
 #define MyAppShortName   "TachyonTranscripts"
-#define MyAppVersion     "0.1.1"
+#define MyAppVersion     "0.1.2"
 #define MyAppPublisher   "PyroDS (Pyrodevstudio@gmail.com)"
 #define MyAppURL         "https://github.com/PyroDS/projectTT"
 #define MyAppExeName     "TachyonTranscripts.exe"

@@ -1252,7 +1252,7 @@ def main() -> None:
 
     if "--version" in argv:
         # Keep in sync with installer/Tachyon.iss ``MyAppVersion``.
-        print("Tachyon Transcripts 0.1.1")
+        print("Tachyon Transcripts 0.1.2")
         return
 
     if "--download-model" in argv:
