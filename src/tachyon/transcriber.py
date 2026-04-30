@@ -25,6 +25,51 @@ logger = logging.getLogger(__name__)
 # At 16 kHz this is ~1 second of audio context for the model.
 OVERLAP_SAMPLES: int = 16_000
 
+
+def _classify_runtime_error(exc: Exception) -> tuple[bool, str, str]:
+    """Classify a transcriber runtime error for user-facing recovery text.
+
+    Returns ``(is_fatal, error_code, user_hint)``.
+    """
+    raw = str(exc).strip()
+    msg = raw.lower()
+
+    if "cublas64_12.dll" in msg:
+        return (
+            True,
+            "cuda_missing_cublas",
+            "Missing CUDA runtime (cublas64_12.dll). Reinstall Tachyon, "
+            "check antivirus quarantine, or switch compute_device to 'cpu'.",
+        )
+    if "cudnn64_9.dll" in msg:
+        return (
+            True,
+            "cuda_missing_cudnn",
+            "Missing CUDA runtime (cudnn64_9.dll). Reinstall Tachyon, "
+            "check antivirus quarantine, or switch compute_device to 'cpu'.",
+        )
+    if "is not found or cannot be loaded" in msg and ".dll" in msg:
+        return (
+            True,
+            "cuda_dll_load_failure",
+            "A required CUDA DLL could not be loaded. Reinstall Tachyon, "
+            "check antivirus quarantine, or switch compute_device to 'cpu'.",
+        )
+    if (
+        "cuda driver version is insufficient" in msg
+        or "no cuda-capable device is detected" in msg
+        or ("cuda" in msg and "driver" in msg and "insufficient" in msg)
+    ):
+        return (
+            True,
+            "cuda_driver_incompatible",
+            "NVIDIA driver is missing/outdated for CUDA 12. Update your "
+            "graphics driver or switch compute_device to 'cpu'.",
+        )
+
+    return False, "", raw or "Unknown transcription error."
+
+
 def _load_whisper_pinned(
     whisper_model_cls: Any,
     model_size: str,
@@ -111,12 +156,14 @@ class Transcriber:
         self,
         chunk_queue: queue.Queue,
         on_segment: Callable[[TranscriptSegment], Any],
+        on_runtime_error: Optional[Callable[[str, str], Any]] = None,
         model_size: str = "auto",
         device: str = "auto",
         compute_type: str = "auto",
     ) -> None:
         self._queue: queue.Queue = chunk_queue
         self._on_segment: Callable[[TranscriptSegment], Any] = on_segment
+        self._on_runtime_error: Optional[Callable[[str, str], Any]] = on_runtime_error
 
         # Requested configuration (may contain "auto").
         self._requested_model_size: str = model_size
@@ -147,6 +194,8 @@ class Transcriber:
         self._stop_event: threading.Event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._drain_on_stop: bool = False
+        self._runtime_error_reported: bool = False
+        self._runtime_error_code: str = ""
 
         # Per-source rolling overlap buffers.  Keys are source tags
         # ("you" / "them"), values are 1-D float32 arrays of the last
@@ -293,6 +342,11 @@ class Transcriber:
         """
         return self._model
 
+    @property
+    def runtime_error_code(self) -> str:
+        """Machine-readable code for the last fatal runtime error."""
+        return self._runtime_error_code
+
     def set_session_start_time(self, start_time: Optional[float] = None) -> None:
         """Set the session start time for relative timestamp computation.
 
@@ -325,6 +379,8 @@ class Transcriber:
         self._stop_event.clear()
         self._drain_on_stop = False
         self._overlap_buffers.clear()
+        self._runtime_error_reported = False
+        self._runtime_error_code = ""
         self._thread = threading.Thread(
             target=self._worker,
             name="TranscriberWorker",
@@ -380,11 +436,28 @@ class Transcriber:
 
             try:
                 self._process_chunk(chunk)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Unhandled error while processing audio chunk (source=%s).",
                     chunk.source,
                 )
+                is_fatal, error_code, user_hint = _classify_runtime_error(exc)
+                if is_fatal:
+                    self._runtime_error_code = error_code
+                    if not self._runtime_error_reported:
+                        self._runtime_error_reported = True
+                        if self._on_runtime_error is not None:
+                            try:
+                                self._on_runtime_error(error_code, user_hint)
+                            except Exception:
+                                logger.warning(
+                                    "Runtime error callback failed.",
+                                    exc_info=True,
+                                )
+                    # Stop the worker after a fatal inference/runtime error.
+                    self._drain_on_stop = False
+                    self._stop_event.set()
+                    break
 
         logger.debug("Transcriber worker exiting main loop.")
 

@@ -240,6 +240,7 @@ tachyon-transcripts/
 - **WASAPI Loopback**: Implemented via `PyAudioWPatch` (sounddevice is still used for mic capture). This provides reliable loopback on Windows and supports multi-device loopback capture.
 - **Hardware-aware Whisper config**: `large-v3` on >=10 GB VRAM GPUs, `medium` on 6-10 GB, `small` on <6 GB, and `distil-large-v3` on CPU.
 - **Graceful fallback**: if CUDA model load fails at startup, retry on CPU with int8 so the app still starts.
+- **Runtime CUDA failure UX**: if CUDA fails during live inference (e.g. missing `cublas64_12.dll`), stop transcription cleanly, keep audio capture running, and show actionable tray guidance (`reinstall`, `check AV quarantine`, `update driver`, or `compute_device="cpu"`).
 - **Rolling buffer with word timestamps**: ~1s overlap prepended to each ~3s chunk. Word-level timestamps from faster-whisper allow precise trimming of the overlap region, eliminating duplicate text at chunk boundaries.
 - **VAD**: faster-whisper has built-in Silero VAD — automatically skips silent chunks.
 - **Resampling**: Devices are captured at native sample rates and resampled to 16kHz before Whisper. This avoids WASAPI errors from requesting unsupported rates.
@@ -251,6 +252,7 @@ tachyon-transcripts/
 - `run.bat` launches from the local venv — no system-wide Python packages
 - Only prerequisite: Python 3.11+ installed on the system (needed for venv creation)
 - **Implemented**: PyInstaller + Inno Setup pipeline under `installer/` produces a standalone `.exe` with zero prerequisites. See `docs/architecture.md` (Distribution & Packaging) and `installer/README.md` for the build procedure.
+- **CUDA packaging policy**: installer bundles CUDA user-space runtime DLLs needed by CTranslate2 (`cublas64_12.dll`, `cudnn64_9.dll`, etc.) under `_internal/cuda`; users should not need to install CUDA Toolkit/cuDNN manually.
 
 ## Verification / Testing
 1. Run `setup.bat` — confirm venv created, deps installed, model downloaded

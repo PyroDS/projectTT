@@ -32,7 +32,7 @@ Implementation notes
 """
 
 from __future__ import annotations
-
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -50,6 +50,58 @@ PROJECT_ROOT = Path(SPECPATH).parent.resolve()
 SRC_ROOT = PROJECT_ROOT / "src"
 ENTRY = str(SRC_ROOT / "tachyon" / "main.py")
 APP_NAME = "TachyonTranscripts"
+CUDA_DLL_DEST = "cuda"
+EXPECTED_CUDA_DLLS = ("cublas64_12.dll", "cudnn64_9.dll")
+
+
+def _collect_cuda_binaries() -> list[tuple[str, str]]:
+    """Collect CUDA DLLs from nvidia pip packages into a fixed destination.
+
+    Using a stable destination keeps runtime DLL discovery deterministic in
+    frozen builds (``_internal/cuda``).
+    """
+    collected: list[tuple[str, str]] = []
+    seen_sources: set[str] = set()
+
+    for nv_pkg in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_runtime"):
+        try:
+            raw_binaries = collect_dynamic_libs(nv_pkg)
+        except Exception:
+            raw_binaries = []
+        for src, _dest in raw_binaries:
+            src_str = str(src)
+            if src_str.lower() in seen_sources:
+                continue
+            seen_sources.add(src_str.lower())
+            collected.append((src_str, CUDA_DLL_DEST))
+
+    # Namespace-packaged nvidia wheels can be skipped by collect_dynamic_libs;
+    # pick up DLLs directly from site-packages as a fallback.
+    site_packages = (Path(sys.executable).parent / ".." / "Lib" / "site-packages").resolve()
+    for pattern in ("nvidia/*/bin/*.dll", "nvidia/*/lib/*.dll"):
+        for dll_path in site_packages.glob(pattern):
+            src_str = str(dll_path)
+            if src_str.lower() in seen_sources:
+                continue
+            seen_sources.add(src_str.lower())
+            collected.append((src_str, CUDA_DLL_DEST))
+
+    return collected
+
+
+def _assert_expected_cuda_dlls(cuda_binaries: list[tuple[str, str]]) -> None:
+    """Fail the build early when required CUDA DLLs are missing."""
+    found = {Path(src).name.lower() for src, _ in cuda_binaries}
+    missing = [name for name in EXPECTED_CUDA_DLLS if name.lower() not in found]
+    if not missing:
+        return
+
+    missing_csv = ", ".join(missing)
+    raise RuntimeError(
+        "Missing required CUDA DLL(s) in PyInstaller inputs: "
+        f"{missing_csv}. Ensure the build venv has "
+        "'nvidia-cublas-cu12' and 'nvidia-cudnn-cu12' installed."
+    )
 
 # ---------------------------------------------------------------------------
 # Hidden imports — modules that PyInstaller's static analysis misses
@@ -93,12 +145,10 @@ for pkg in ("faster_whisper", "ctranslate2"):
 
 # CUDA runtime DLLs from the nvidia pip packages.  CTranslate2 on Windows
 # dlopens ``cublas64_12.dll`` / ``cudnn64_9.dll`` with bare filenames, so
-# they must land alongside the frozen exe.
-for nv_pkg in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_runtime"):
-    try:
-        binaries += collect_dynamic_libs(nv_pkg)
-    except Exception:
-        pass
+# they must be discoverable at runtime from a known location.
+cuda_binaries = _collect_cuda_binaries()
+_assert_expected_cuda_dlls(cuda_binaries)
+binaries += cuda_binaries
 
 # Audio backends: portaudio ships inside these wheels
 for audio_pkg in ("sounddevice", "pyaudiowpatch", "soundfile"):

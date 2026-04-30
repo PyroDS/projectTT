@@ -30,7 +30,7 @@ The script does five things:
 2. Generates `assets\icon.ico` from `scripts\make_icon.py` (same visual design as the tray icon, packed as a multi-resolution ICO).
 3. Wipes any stale `build\` and `dist\` output.
 4. Runs PyInstaller against `tachyon.spec` to produce `dist\TachyonTranscripts\TachyonTranscripts.exe` plus its supporting DLL / data bundle (~500 MB–1.2 GB depending on CUDA DLLs present).
-5. Runs Inno Setup against `Tachyon.iss`, which compresses that folder into a single `installer\dist\TachyonTranscripts-Setup-0.1.0.exe`.
+5. Runs Inno Setup against `Tachyon.iss`, which compresses that folder into a single `installer\dist\TachyonTranscripts-Setup-0.1.2.exe`.
 
 Total build time on a warm machine: 3–8 minutes.
 
@@ -44,6 +44,8 @@ Total build time on a warm machine: 3–8 minutes.
 ### Dynamic libraries
 - `ctranslate2` + `faster_whisper` binaries via `collect_all`.
 - CUDA runtime DLLs (`cublas64_12.dll`, `cudnn64_9.dll`, and friends) from the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` pip packages. These are required for GPU inference; without them CTranslate2 falls back to CPU at first use rather than at import.
+  - Build-time guard: `installer/tachyon.spec` now hard-fails if `cublas64_12.dll` or `cudnn64_9.dll` are missing from collected binaries.
+  - Output location: bundled into `dist\TachyonTranscripts\_internal\cuda\` so runtime DLL registration can add one deterministic folder to `PATH`.
 - PortAudio variants shipped inside `sounddevice` and `PyAudioWPatch`.
 
 ### Models
@@ -76,5 +78,6 @@ Before announcing a release, smoke-test on a clean Windows VM:
 - [ ] Consent checkbox is required to proceed past the legal page.
 - [ ] After finishing the wizard, the tray icon appears.
 - [ ] Right-click → Start Recording produces a `mic.wav` and (if applicable) `system.wav` in the output folder.
+- [ ] `dist\TachyonTranscripts\_internal\cuda\cublas64_12.dll` and `...\cudnn64_9.dll` both exist before running Inno Setup.
 - [ ] Uninstall via Settings → Apps removes program/runtime artifacts and shortcuts, while preserving recordings in the configured output folder (default: app-local `output/`).
 - [ ] Re-install over an existing install works without errors.

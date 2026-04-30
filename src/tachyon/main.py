@@ -20,34 +20,86 @@ from typing import Optional
 # path.  We must register them before any CUDA library is loaded.
 # ---------------------------------------------------------------------------
 def _register_cuda_dll_dirs() -> None:
-    """Add nvidia pip-package bin dirs to the DLL search path.
+    """Register possible CUDA DLL directories for source and frozen installs.
 
-    Uses both ``os.add_dll_directory`` (for standard Windows DLL search)
-    and prepends to ``PATH`` (for libraries like CTranslate2 that load
-    CUDA DLLs via ``ctypes`` or ``LoadLibrary`` with bare filenames).
+    Source installs keep CUDA DLLs under ``site-packages/nvidia/*/(bin|lib)``.
+    Frozen installs place DLLs in one-folder bundle paths such as
+    ``_internal/cuda``. We register all plausible directories before any
+    CTranslate2/faster-whisper import path can resolve CUDA libraries.
     """
-    site_packages = Path(sys.executable).parent / ".." / "Lib" / "site-packages"
-    site_packages = site_packages.resolve()
-    extra_dirs: list[str] = []
-    for vendor_dir in site_packages.glob("nvidia/*/bin"):
-        if vendor_dir.is_dir():
-            dir_str = str(vendor_dir)
-            extra_dirs.append(dir_str)
+    if sys.platform != "win32":
+        return
+
+    candidate_dirs: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(path: Path) -> None:
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            resolved = str(path)
+        lowered = resolved.lower()
+        if lowered in seen:
+            return
+        seen.add(lowered)
+        candidate_dirs.append(path)
+
+    exe_dir = Path(sys.executable).resolve().parent
+    _add(exe_dir)
+    _add(exe_dir / "_internal")
+    _add(exe_dir / "_internal" / "cuda")
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        meipass_dir = Path(meipass)
+        _add(meipass_dir)
+        _add(meipass_dir / "_internal")
+        _add(meipass_dir / "_internal" / "cuda")
+        _add(meipass_dir / "cuda")
+
+    site_packages = (Path(sys.executable).parent / ".." / "Lib" / "site-packages").resolve()
+    _add(site_packages / "nvidia")
+
+    search_patterns = (
+        "nvidia/*/bin",
+        "nvidia/*/lib",
+        "_internal/cuda",
+        "_internal/nvidia/*/bin",
+        "_internal/nvidia/*/lib",
+        "nvidia/*/bin",
+        "nvidia/*/lib",
+    )
+
+    expanded: list[Path] = []
+    for base in candidate_dirs:
+        for pattern in search_patterns:
             try:
-                os.add_dll_directory(dir_str)
+                expanded.extend(base.glob(pattern))
             except OSError:
-                pass
-    # Also check for lib directories (some packages put DLLs there)
-    for vendor_dir in site_packages.glob("nvidia/*/lib"):
-        if vendor_dir.is_dir():
-            dir_str = str(vendor_dir)
-            extra_dirs.append(dir_str)
-            try:
-                os.add_dll_directory(dir_str)
-            except OSError:
-                pass
-    if extra_dirs:
-        os.environ["PATH"] = os.pathsep.join(extra_dirs) + os.pathsep + os.environ.get("PATH", "")
+                continue
+
+    registered_dirs: list[str] = []
+    for path in expanded:
+        if not path.is_dir():
+            continue
+        # Prefer directories that look like CUDA runtime folders.
+        dll_names = {p.name.lower() for p in path.glob("*.dll")}
+        if not any(
+            name.startswith(("cublas", "cudnn", "cudart", "nvrtc", "cuda"))
+            for name in dll_names
+        ):
+            continue
+        dir_str = str(path)
+        registered_dirs.append(dir_str)
+        try:
+            os.add_dll_directory(dir_str)
+        except OSError:
+            pass
+
+    if registered_dirs:
+        # Keep order stable while removing duplicates.
+        ordered_unique = list(dict.fromkeys(registered_dirs))
+        os.environ["PATH"] = os.pathsep.join(ordered_unique) + os.pathsep + os.environ.get("PATH", "")
 
 _register_cuda_dll_dirs()
 
@@ -92,6 +144,35 @@ from tachyon.ui.overlay import CaptionOverlay
 from tachyon.ui.reviewer import TranscriptReviewer
 
 logger = logging.getLogger(__name__)
+
+
+def _friendly_model_load_error(exc: Exception) -> str:
+    """Return user-facing guidance for common startup model-load failures."""
+    msg = str(exc).lower()
+    if "cublas64_12.dll" in msg:
+        return (
+            "Missing CUDA runtime (cublas64_12.dll). Reinstall Tachyon, check "
+            "antivirus quarantine, or set compute_device to 'cpu' in config.json."
+        )
+    if "cudnn64_9.dll" in msg:
+        return (
+            "Missing CUDA runtime (cudnn64_9.dll). Reinstall Tachyon, check "
+            "antivirus quarantine, or set compute_device to 'cpu' in config.json."
+        )
+    if "cuda" in msg and "driver" in msg:
+        return (
+            "NVIDIA driver may be missing or outdated for CUDA 12. Update the "
+            "driver or set compute_device to 'cpu' in config.json."
+        )
+    if "dll" in msg and "cannot be loaded" in msg:
+        return (
+            "A required runtime DLL could not be loaded. Reinstall Tachyon and "
+            "check antivirus quarantine."
+        )
+    return (
+        "Check tachyon.log for details. If needed, set compute_device to 'cpu' "
+        "in config.json as a fallback."
+    )
 
 
 def _discover_wav_files(audio_dir: Path) -> list[Path]:
@@ -158,6 +239,8 @@ class App:
 
         # Recording state
         self._recording = False
+        self._transcription_error_code: str = ""
+        self._transcription_error_hint: str = ""
 
         # Batch re-transcription state
         self._batch_thread: Optional[threading.Thread] = None
@@ -314,6 +397,7 @@ class App:
             self._transcriber = Transcriber(
                 chunk_queue=self._audio_queue,
                 on_segment=self._on_segment,
+                on_runtime_error=self._on_transcriber_runtime_error,
                 model_size=self._config.model_size,
                 device=self._config.compute_device,
             )
@@ -326,13 +410,14 @@ class App:
                 daemon=True,
             ).start()
             self._transcriber.load_model()
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to load Whisper model — cannot continue.")
             self._tray.set_status("Model failed to load — see tachyon.log")
+            hint = _friendly_model_load_error(exc)
             self._tray.notify(
                 "Tachyon Transcripts",
                 "Failed to load the transcription model. "
-                "Check tachyon.log for details.",
+                f"{hint}",
             )
             return
         finally:
@@ -494,6 +579,9 @@ class App:
             return
 
         logger.info("Starting recording...")
+        self._transcription_error_code = ""
+        self._transcription_error_hint = ""
+        self._tray.set_status(None)
 
         # Create a new session (not yet "recording" — only after capture starts)
         self._session = Session()
@@ -588,10 +676,24 @@ class App:
                 export_transcript(self._session, self._config.get_output_path())
                 logger.info("Transcript exported to %s", self._session_dir)
                 self._tray.set_last_session_time(self._session.start_datetime)
-                self._tray.notify(
-                    "Tachyon Transcripts",
-                    f"Recording saved to {self._session_dir.name}",
-                )
+                if self._transcription_error_code:
+                    if self._session.segment_count == 0:
+                        self._tray.notify(
+                            "Tachyon Transcripts",
+                            "Audio saved, but transcript failed. "
+                            f"{self._transcription_error_hint}",
+                        )
+                    else:
+                        self._tray.notify(
+                            "Tachyon Transcripts",
+                            "Recording saved with a partial transcript. "
+                            f"{self._transcription_error_hint}",
+                        )
+                else:
+                    self._tray.notify(
+                        "Tachyon Transcripts",
+                        f"Recording saved to {self._session_dir.name}",
+                    )
             except Exception:
                 logger.exception("Failed to export transcript")
                 self._tray.notify(
@@ -607,6 +709,7 @@ class App:
             self._reviewer.set_recording_active(False)
             self._reviewer.refresh()
 
+        self._tray.set_status(None)
         logger.info("Recording stopped.")
 
     # ------------------------------------------------------------------
@@ -624,6 +727,33 @@ class App:
             self._overlay_queue.put_nowait(segment)
         except queue.Full:
             pass  # overlay will catch up
+
+    def _on_transcriber_runtime_error(self, error_code: str, user_hint: str) -> None:
+        """Handle fatal runtime inference errors from transcriber thread."""
+        logger.error("Transcriber runtime error (%s): %s", error_code, user_hint)
+        self._overlay._root.after(
+            0,
+            self._handle_transcriber_runtime_error,
+            error_code,
+            user_hint,
+        )
+
+    def _handle_transcriber_runtime_error(
+        self,
+        error_code: str,
+        user_hint: str,
+    ) -> None:
+        """Main-thread handler for transcriber runtime failures."""
+        if self._transcription_error_code:
+            return
+        self._transcription_error_code = error_code
+        self._transcription_error_hint = user_hint
+        self._tray.set_status("Transcription failed — audio capture continues")
+        self._tray.notify(
+            "Tachyon Transcripts",
+            "Transcription failed during recording. Audio is still being saved. "
+            f"{user_hint}",
+        )
 
     # ------------------------------------------------------------------
     # UI callbacks

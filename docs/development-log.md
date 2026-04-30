@@ -37,6 +37,40 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-30 — CUDA runtime bundling + actionable failure UX
+
+**What was done:**
+- Hardened installer CUDA bundling so missing GPU runtime DLLs fail fast at build time:
+  - `installer/tachyon.spec` now collects CUDA runtime DLLs from `nvidia.cublas`, `nvidia.cudnn`, and `nvidia.cuda_runtime` into a deterministic destination (`_internal/cuda`).
+  - Added explicit build-time guard in `tachyon.spec` for required DLLs (`cublas64_12.dll`, `cudnn64_9.dll`) to prevent shipping a GPU build that cannot load at runtime.
+  - `installer/build_installer.bat` now validates `dist\TachyonTranscripts\_internal\cuda\cublas64_12.dll` and `...\cudnn64_9.dll` before invoking Inno Setup.
+  - `installer/README.md` updated with the exact CUDA DLL expectations and the new verification checklist item.
+- Extended runtime CUDA DLL discovery in `src/tachyon/main.py`:
+  - `_register_cuda_dll_dirs()` now searches both source-layout and frozen-layout paths (`_internal/cuda`, `_MEIPASS`, bundled `nvidia/*/(bin|lib)` paths) and registers discovered directories via `os.add_dll_directory()` + `PATH`.
+- Added actionable user-facing transcription failure handling:
+  - `src/tachyon/transcriber.py` now classifies fatal CUDA runtime failures (`cublas64_12.dll`, `cudnn64_9.dll`, generic DLL load failures, driver mismatch) and reports them once via a runtime-error callback.
+  - `src/tachyon/main.py` now surfaces those failures in tray status/notifications during recording, keeps audio capture running, and avoids silent "success" messaging when transcript generation fails.
+  - Stop/export notifications now distinguish between normal save, partial transcript save, and "audio saved but transcript failed."
+  - Startup model-load failures now include actionable hint text (reinstall, AV quarantine, driver update, or `compute_device=\"cpu\"` fallback) instead of only "check log."
+- Added regression coverage:
+  - `tests/test_transcriber_labels.py` now includes runtime error-classification tests for missing `cublas64_12.dll` and unknown non-fatal errors.
+- Updated user/dev docs to match behavior:
+  - `README.md` troubleshooting now states CUDA Toolkit/cuDNN manual install is not required, calls out driver requirement, and includes a concrete self-fix checklist for missing CUDA DLL errors.
+  - `docs/architecture.md` and `docs/implementation-plan.md` now document `_internal/cuda` packaging and one-shot runtime failure guidance behavior.
+
+**Decisions made:**
+- Keep CUDA runtime DLLs under one deterministic frozen path (`_internal/cuda`) rather than relying on package-relative locations. This simplifies startup DLL registration and smoke-test assertions.
+- Treat missing CUDA runtime DLLs as **fatal for live transcription** (with explicit user guidance) instead of repeatedly logging per-chunk exceptions that yield empty transcripts with no clear explanation.
+- Keep the CPU fallback recommendation user-facing (`compute_device=\"cpu\"`) for immediate recovery when GPU runtime cannot be restored quickly.
+
+**Verification:**
+- `python -m pytest tests` — all 29 tests pass (including new transcriber runtime-error classification tests).
+- `ReadLints` on edited files (`main.py`, `transcriber.py`, installer/docs/test files) — no diagnostics.
+- Confirmed docs and installer scripts now include explicit checks/messages for expected CUDA DLLs and user self-recovery steps.
+
+**Issues encountered:**
+- Initial `tachyon.spec` destination used `"_internal/cuda"` in binary tuples, which PyInstaller nested under `_internal/_internal/cuda`. This made `build_installer.bat` fail its CUDA check. Fixed by using destination `"cuda"` so files land at `dist\TachyonTranscripts\_internal\cuda\`.
+
 ### 2026-04-30 — Security hardening pass (supply chain + native hotkey)
 
 **What was done:**

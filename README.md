@@ -109,7 +109,14 @@ All settings live in `config.json` (next to the app). Relevant keys:
 
 **"Loading model…" takes forever on first launch.** The Whisper model is being downloaded (size depends on hardware/model; often ~600 MB to ~1 GB). During this phase the tray menu shows a status line and recording stays disabled until loading finishes. If you're on the installer and declined the post-install pre-download, the model is fetched on first launch instead. Later launches are fast.
 
-**"Failed to load the transcription model."** Check `tachyon.log` in the install directory. Common causes: no internet on first run, antivirus quarantined a CUDA DLL, graphics driver older than CUDA 12 requires. The app will still load but recording is disabled — fix the cause and restart.
+**"Failed to load the transcription model."** Check `tachyon.log` in the install directory. Common causes: no internet on first run, antivirus quarantined a CUDA DLL, or an NVIDIA driver that is too old for CUDA 12. You do **not** need to install CUDA Toolkit/cuDNN manually for Tachyon; the installer bundles the needed runtime DLLs. The app will still load but recording is disabled — fix the cause and restart.
+
+**`cublas64_12.dll is not found or cannot be loaded` (or `cudnn64_9.dll`).** This means GPU runtime loading failed. Fix path:
+1. Reinstall Tachyon (restores bundled CUDA runtime DLLs).
+2. Check antivirus quarantine/blocked files and restore the DLL if quarantined.
+3. Update NVIDIA graphics driver.
+4. If you need immediate operation, set `compute_device` to `"cpu"` in `config.json` and restart.
+Raw WAV audio is still saved even when live transcription fails, so you can re-transcribe after fixing the runtime issue.
 
 **"System audio capture unavailable — recording mic only."** WASAPI loopback couldn't open the selected output device. This usually means the device is in exclusive mode (some pro audio drivers default to this). Try a different output device or set it to shared mode in Windows sound settings.
 

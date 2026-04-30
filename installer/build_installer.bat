@@ -82,6 +82,17 @@ if not exist "dist\TachyonTranscripts\TachyonTranscripts.exe" (
     exit /b 1
 )
 
+echo [4.5/5] Verifying bundled CUDA runtime DLLs...
+set "CUDA_ROOT=dist\TachyonTranscripts\_internal\cuda"
+for %%D in (cublas64_12.dll cudnn64_9.dll) do (
+    if not exist "%CUDA_ROOT%\%%D" (
+        echo ERROR: Missing required CUDA DLL: %CUDA_ROOT%\%%D
+        echo Ensure .venv includes nvidia-cublas-cu12 and nvidia-cudnn-cu12.
+        popd
+        exit /b 1
+    )
+)
+
 :: --- Locate Inno Setup compiler -------------------------------------------
 
 echo [5/5] Running Inno Setup...
