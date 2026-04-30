@@ -4,7 +4,14 @@ All notable changes to Tachyon Transcripts are documented in this file. The form
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- Tray-first startup now keeps the app visible/responsive while the model loads in the background and surfaces status text in the tray menu.
+- Setup-time model pre-download now uses the same hardware resolution policy as runtime, reducing mismatches between downloaded and selected models.
+
+### Fixed
+- Real-time chunk timestamps now represent chunk-audio start time (not flush time), improving transcript timing alignment.
+- Model-loader worker now guards transcriber construction and handles startup failures through the same tray status/notification path.
+- Added deterministic regression coverage for chunk timestamp semantics.
 
 ## [0.1.0] — 2026-04-20 — First public release
 
@@ -34,6 +41,5 @@ Initial shareable release. The app itself has been functional internally for mon
 
 ### Known issues
 - The installer is not code-signed. Windows SmartScreen will show a warning on first run.
-- If the user declines the post-install model download, the first launch blocks silently during `load_model()` without any progress UI. In-wizard progress bar is a v1.1 item.
 - pyannote speaker diarization is optional and not bundled in the installer; users who want it must `pip install pyannote.audio` in the source install.
-- No automated test suite yet. All testing is manual, on live recordings. Adding smoke tests is a v1.1 priority.
+- If the user declines post-install model download, first launch can still be slow; tray status is shown, but there is still no dedicated wizard progress bar.

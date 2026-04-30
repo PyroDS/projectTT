@@ -51,6 +51,22 @@ def _register_cuda_dll_dirs() -> None:
 
 _register_cuda_dll_dirs()
 
+
+def _set_windows_app_user_model_id() -> None:
+    """Give Windows a stable app identity for taskbar icon grouping."""
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "PyroDS.TachyonTranscripts",
+        )
+    except Exception:
+        # Non-critical: Tk/pystray can still run if Windows rejects this.
+        pass
+
+
 import keyboard
 
 from tachyon.config import Config, LoopbackDevice
@@ -290,24 +306,23 @@ class App:
     def _load_model_worker(self) -> None:
         """Background-load the Whisper model and update the tray when done."""
         logger.info("Loading transcription model (background thread)...")
-        self._transcriber = Transcriber(
-            chunk_queue=self._audio_queue,
-            on_segment=self._on_segment,
-            model_size=self._config.model_size,
-            device=self._config.compute_device,
-        )
-
-        # Heartbeat so the log shows forward motion even while the HF
-        # download (which uses tqdm, not logging) is running.
         load_done = threading.Event()
-        threading.Thread(
-            target=self._model_load_heartbeat,
-            args=(load_done,),
-            name="ModelLoaderHeartbeat",
-            daemon=True,
-        ).start()
 
         try:
+            self._transcriber = Transcriber(
+                chunk_queue=self._audio_queue,
+                on_segment=self._on_segment,
+                model_size=self._config.model_size,
+                device=self._config.compute_device,
+            )
+            # Heartbeat so the log shows forward motion even while the HF
+            # download (which uses tqdm, not logging) is running.
+            threading.Thread(
+                target=self._model_load_heartbeat,
+                args=(load_done,),
+                name="ModelLoaderHeartbeat",
+                daemon=True,
+            ).start()
             self._transcriber.load_model()
         except Exception:
             logger.exception("Failed to load Whisper model — cannot continue.")
@@ -1220,6 +1235,10 @@ def main() -> None:
 
     if "--download-model" in argv:
         raise SystemExit(_download_model_cli())
+
+    # Must be set before the first Tk window is created, otherwise Windows
+    # groups the process under python.exe and may show Python's taskbar icon.
+    _set_windows_app_user_model_id()
 
     from tachyon.config import PROJECT_ROOT
 

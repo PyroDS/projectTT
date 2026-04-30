@@ -49,13 +49,13 @@ Total build time on a warm machine: 3–8 minutes.
 ### Models
 - **NOT bundled** by default — the installer is already large enough and shipping a 1–3 GB model would make it unwieldy.
 - The installer offers an optional post-install `[Run]` step that calls `TachyonTranscripts.exe --download-model`. This pre-caches the recommended Whisper model into `%USERPROFILE%\.cache\huggingface\`, so the first launch doesn't block on a long download.
-- If the user declines, the model downloads on first launch via `faster_whisper`'s default behaviour (the app's UI will appear to hang during that download — this is a known rough edge to be addressed in v1.1 with an in-wizard progress bar).
+- If the user declines, the model downloads on first launch via `faster_whisper`'s default behaviour. The tray stays available and shows model-load status text, but the wizard still has no dedicated progress bar.
 
 ## Install behaviour
 
 - **Per-user install**: `%LocalAppData%\Programs\Tachyon Transcripts\`. No admin elevation required, which matters because the installer is unsigned — forcing UAC would trigger a second SmartScreen warning.
 - **Shortcuts**: Start Menu entry by default; desktop shortcut optional; autostart-on-login optional (unchecked by default).
-- **Uninstall**: Standard "Add or Remove Programs" entry. Removes the install tree and cached model weights under `{app}\models\`, but deliberately **does not** touch `%USERPROFILE%\Documents\Tachyon Transcripts\` — user recordings must never be deleted by an uninstall.
+- **Uninstall**: Standard "Add or Remove Programs" entry. Removes the install tree and cached model weights under `{app}\models\`, but deliberately **does not** touch user recordings (default output is `output/` next to the app unless changed in settings).
 
 ## Known rough edges (v1)
 
@@ -63,7 +63,7 @@ Total build time on a warm machine: 3–8 minutes.
 - **Antivirus heuristics** flag PyInstaller-built executables with some frequency because the bootloader pattern is also used by malware. If multiple users report this, the fix is either code-signing or switching to an MSIX / raw-folder distribution. Track reports and revisit.
 - **Bundle size**: The one-folder bundle is ~500 MB without CUDA DLLs and ~1.2 GB with them. The Inno Setup installer compresses this to ~400–800 MB with `lzma2/max`.
 - **First-launch delay**: See "Models" above. The post-install download step mitigates this, but the UX is still not great if the user skips it.
-- **Model-download progress bar**: The wizard doesn't show one. If the default model (~1 GB) isn't cached, the app blocks silently during `load_model()`. The workaround is the installer's `--download-model` run step; a proper in-wizard progress UI is a v1.1 item.
+- **Model-download progress bar**: The wizard doesn't show one. If the selected model isn't cached, first launch can still be lengthy. The app now keeps the tray available and shows load status there; a dedicated wizard progress UI is still a v1.1 item.
 
 ## Verification checklist
 
@@ -76,5 +76,5 @@ Before announcing a release, smoke-test on a clean Windows VM:
 - [ ] Consent checkbox is required to proceed past the legal page.
 - [ ] After finishing the wizard, the tray icon appears.
 - [ ] Right-click → Start Recording produces a `mic.wav` and (if applicable) `system.wav` in the output folder.
-- [ ] Uninstall via Settings → Apps removes the install tree but leaves recordings in `Documents\Tachyon Transcripts\`.
+- [ ] Uninstall via Settings → Apps removes the install tree but leaves recordings in the configured output folder (default: app-local `output/`).
 - [ ] Re-install over an existing install works without errors.

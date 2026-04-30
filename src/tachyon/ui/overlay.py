@@ -90,6 +90,7 @@ class CaptionOverlay:
 
         # Fade state
         self._fade_id: Optional[str] = None
+        self._app_icon_photo: object | None = None
 
         # -- Drag state ------------------------------------------------------
         self._drag_offset_x: int = 0
@@ -98,6 +99,7 @@ class CaptionOverlay:
         # -- Build the tkinter UI --------------------------------------------
         self._root: tk.Tk = tk.Tk()
         self._root.withdraw()  # hide until fully configured
+        self._set_window_icon()
         self._configure_window()
         self._build_widgets()
         self._bind_drag_events()
@@ -140,6 +142,18 @@ class CaptionOverlay:
         # Fixed width; height adapts to content
         self._root.geometry(f"{Dim.overlay_width}x1")
         self._root.resizable(False, False)
+
+    def _set_window_icon(self) -> None:
+        """Use the Tachyon icon for the root window and child dialogs."""
+        try:
+            from PIL import ImageTk
+            from tachyon.ui.tray import create_app_icon
+
+            icon_img = create_app_icon(recording=False)
+            self._app_icon_photo = ImageTk.PhotoImage(icon_img)
+            self._root.iconphoto(True, self._app_icon_photo)
+        except Exception:
+            logger.debug("Failed to set Tk window icon", exc_info=True)
 
     def _build_widgets(self) -> None:
         """Build the full widget hierarchy."""

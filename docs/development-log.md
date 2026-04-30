@@ -10,9 +10,11 @@
 | `config.py` | Done | JSON config with defaults, load/save, pathlib, LoopbackDevice support |
 | `capture.py` | Done | WASAPI mic + multi-loopback, resampling, WAV writing, device_manifest.json |
 | `transcriber.py` | Done | faster-whisper CUDA, rolling buffer, word timestamps, dynamic speaker labels |
+| `hardware.py` | Done | NVML/torch hardware detection + auto model/device recommendation |
 | `session.py` | Done | Session lifecycle + thread-safe segment storage |
 | `exporter.py` | Done | Markdown transcript generation with Protocol types + versioned export + dynamic audio links |
 | `batch.py` | Done | Batch re-transcription with crosstalk suppression + dedup + multi-loopback WAV discovery |
+| `ui/wizard.py` | Done | First-run setup wizard + legal consent gate |
 | `ui/theme.py` | Done | Sci-fi dark theme: deep blue-teal palette, cyan accents, glow tokens, card states |
 | `ui/widgets.py` | Done | Custom widgets: HoverButton, GlowFrame, GradientBar, PulseIndicator, SessionCard |
 | `ui/reviewer.py` | Done | Sci-fi reviewer: gradient toolbar, session cards, two-line header, status bar, window icon |
@@ -34,6 +36,34 @@ Per the implementation plan, the build order is:
 4. **Polish & Packaging** (Steps 8-10): Config + Main + Launchers
 
 ## Work Log
+
+### 2026-04-29 — Review findings remediation (timestamp alignment + startup/docs sync)
+
+**What was done:**
+- **Real-time timestamp alignment**:
+  - `src/tachyon/capture.py`: changed `AudioChunk.timestamp` semantics to represent the wall-clock **start** of chunk audio, not enqueue/flush time.
+  - `_flush_buffer()` / `_flush_loopback_buffer()` now compute `chunk_start = time.time() - (len(resampled) / TARGET_SAMPLERATE)` before queueing.
+  - Added deterministic regression coverage in `tests/test_capture_timestamps.py` proving a 3-second chunk flushed at `t=103` is timestamped at `t=100`.
+- **Setup model pre-download parity with runtime**:
+  - `scripts/download_model.py` now bootstraps `src/` on `sys.path` and uses `tachyon.hardware.resolve_transcriber_config()` so setup chooses the same model/device policy as runtime.
+  - Kept setup resilient: if hardware resolution fails, script falls back to CPU `distil-large-v3` and continues.
+- **Startup hardening**:
+  - `src/tachyon/main.py`: moved `Transcriber(...)` construction into the guarded `try` in `_load_model_worker()` so initialization failures follow the same tray status/notify failure path.
+  - `src/tachyon/ui/tray.py`: wrapped menu refresh, title updates, and notifications in guarded `try/except` blocks so cross-thread tray updates fail soft (warn+continue) instead of risking startup dead-ends.
+- **Documentation sync (core + release docs)**:
+  - `docs/implementation-plan.md`: updated module tree and startup/model-selection behavior (wizard + tray-first + background model load + auto hardware selection), tray menu details, session/export wording, and transcript/audio naming notes.
+  - `docs/architecture.md`: aligned startup flow, reviewer layout, tray behavior, overlay placeholder behavior, added `ui/widgets.py`, fixed session/export responsibility wording, and refreshed installer notes (`assets/icon.ico`, `installer/hooks/hook-webrtcvad.py`).
+  - `README.md`: updated troubleshooting to reflect tray-visible model-load status (not silent blocking).
+  - `installer/README.md`: removed stale “blocks silently” wording and fixed output-folder preservation wording/checklist.
+  - `CHANGELOG.md`: populated `[Unreleased]` with these fixes and removed stale “no tests” / silent-load known-issue statements.
+
+**Verification:**
+- `.venv\\Scripts\\python -m pytest tests -q` → **27 passed**.
+- `.venv\\Scripts\\python -m py_compile src\\tachyon\\capture.py src\\tachyon\\main.py src\\tachyon\\ui\\tray.py scripts\\download_model.py tests\\test_capture_timestamps.py` → pass.
+- IDE lint check on edited Python files → no errors.
+
+**Issues encountered:**
+- `pytest` was not available in the venv. Installed via `requirements-dev.txt` before running tests.
 
 ### 2026-04-29 — README legal section: stronger non-lawyer disclaimer
 
@@ -685,6 +715,25 @@ Pre-release audit pass on top of the 2026-04-22 v0.1.0 work. Found and fixed the
 **Issues encountered:**
 - None.
 
+### 2026-04-29 — HF token button privacy label follow-up
+
+**What was done:**
+- Updated reviewer HF token button text in `ui/reviewer.py` to stop showing masked token fragments in the toolbar.
+- New button text behavior:
+  - no token saved: `HF Token`
+  - token saved: `HF Saved`
+- Kept existing token dialog, save/delete flow, backend gating (`pyannote` only), and config persistence unchanged.
+
+**Decisions made:**
+- Chose a binary state label instead of any partial token display to reduce accidental secret exposure and save horizontal toolbar space.
+
+**Verification:**
+- `ReadLints` for `src/tachyon/ui/reviewer.py` (no diagnostics).
+- `python -m pytest tests/test_reviewer_discovery.py tests/test_diarizer.py` (pass, 5 tests).
+
+**Issues encountered:**
+- None.
+
 ## Open Issues
 
 - None currently.
@@ -970,3 +1019,44 @@ Five merged capabilities (Tasks #1–#5 of the shareable-release plan):
 
 **Issues encountered:**
 - None. Windows' `2-` ordinal-prefix rename is the kind of thing substring-matching can't reliably catch without being overly lenient; the default-loopback fallback is the pragmatic escape hatch.
+
+### 2026-04-29 — Reviewer toolbar backend selector clipping fix
+
+**What was done:**
+- Fixed a reviewer-toolbar layout regression where the diarization backend selector could be pushed out of view at normal window sizes (especially when the pyannote HF token button was visible).
+- Updated `ui/reviewer.py` toolbar config controls to reduce horizontal pressure:
+  - backend dropdown now uses compact values (`speechbrain`, `pyannote`, `resemblyzer`) instead of long decorated labels,
+  - backend dropdown width reduced and paired with an explicit `Backend:` label,
+  - pack order adjusted so the backend control remains visible/accessible while optional controls occupy lower priority space.
+- Kept existing behavior intact for:
+  - `Identify Speakers` backend resolution,
+  - pyannote HF token button show/hide logic,
+  - control disabling during active work / edit mode.
+
+**Decisions made:**
+- Used canonical backend keys directly in the combobox to avoid fragile parsing from display labels (`split()[0]`) and to keep state handling simple.
+- Prioritized visibility of core diarization controls over secondary toolbar actions when horizontal space is constrained.
+
+**Verification:**
+- `python -m pytest tests/test_reviewer_discovery.py tests/test_diarizer.py` (pass, 5 tests).
+- `ReadLints` for `src/tachyon/ui/reviewer.py` (no diagnostics).
+
+**Issues encountered:**
+- None.
+
+### 2026-04-29 — Windows taskbar icon identity fix
+
+**What was done:**
+- Fixed the app falling back to the default Python icon in the Windows taskbar.
+- Added an explicit Windows AppUserModelID during startup before the first tkinter window is created, so Windows groups the process under Tachyon instead of `python.exe`.
+- Set the hidden tkinter root window's icon from the existing programmatic Tachyon icon and marked it as the default icon for child dialogs.
+
+**Decisions made:**
+- Reused `ui.tray.create_app_icon()` instead of introducing a separate icon asset for runtime windows, keeping the taskbar/window icon visually aligned with the tray icon.
+- Kept the AppUserModelID stable and app-scoped (`PyroDS.TachyonTranscripts`) rather than versioned, so Windows taskbar grouping remains consistent across releases.
+
+**Verification:**
+- `ReadLints` for `src/tachyon/main.py` and `src/tachyon/ui/overlay.py` (no diagnostics).
+
+**Issues encountered:**
+- None.

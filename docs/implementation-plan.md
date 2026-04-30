@@ -25,7 +25,7 @@ Build a local-first, covert meeting transcription tool for Windows. Captures mic
                      ▼
 ┌──────────────────────────────────────────┐
 │        Transcriber (transcriber.py)       │
-│  - faster-whisper (large-v3, CUDA)       │
+│  - faster-whisper (auto hardware select) │
 │  - ~3-5 sec chunk processing             │
 │  - VAD to skip silence                   │
 │  - Returns: text, start_time, end_time   │
@@ -65,11 +65,15 @@ tachyon-transcripts/
 │       ├── config.py         # User settings (output dir, model size, hotkey)
 │       ├── batch.py          # Batch re-transcription engine
 │       ├── diarizer.py       # Speaker diarization engine (post-processing)
+│       ├── hardware.py       # GPU/CPU detection + model recommendation
 │       └── ui/
 │           ├── __init__.py
 │           ├── tray.py       # System tray icon + menu (pystray)
 │           ├── overlay.py    # Transparent caption overlay (tkinter)
-│           └── reviewer.py   # Transcript review + re-transcription window
+│           ├── reviewer.py   # Transcript review + re-transcription window
+│           ├── wizard.py     # First-run setup + consent gate
+│           ├── theme.py      # Centralized UI theme constants
+│           └── widgets.py    # Shared custom tkinter widgets
 ├── docs/
 │   ├── implementation-plan.md
 │   ├── architecture.md
@@ -121,7 +125,8 @@ tachyon-transcripts/
 - Provide `start()`, `stop()`, `get_devices()` interface
 
 ### Step 3: Transcription Engine (`transcriber.py`)
-- Load `faster-whisper` model (large-v3) with CUDA on startup
+- Load `faster-whisper` with hardware-aware defaults (`model_size="auto"`, `compute_device="auto"`)
+- Resolve model/device via runtime hardware detection (`hardware.py`) and support CUDA->CPU fallback on load failure
 - Worker thread pulls chunks from the audio queue
 - Each chunk transcribed with `model.transcribe()` using VAD filter and `word_timestamps=True` for precise word-level boundaries
 - Returns `TranscriptSegment(speaker, text, start_time, end_time)`
@@ -133,16 +138,17 @@ tachyon-transcripts/
 - Stores list of `TranscriptSegment` objects
 - Tracks session start time (wall clock) and elapsed time
 - Provides `add_segment()`, `get_recent(n)`, `get_all()`
-- On stop: triggers export
+- Export is orchestrated by `main.py` on recording stop
 
 ### Step 5: Markdown Exporter (`exporter.py`)
 - Takes session data + output directory path
+- Writes `transcript.md` plus matching `transcript.json` sidecar with exact segment timings
 - Generates markdown like:
   ```markdown
   # Meeting Transcript — 2026-02-22 14:30
 
   **Duration**: 0:45:23
-  **Audio**: [Mic Recording](./audio/mic_20260222_143000.wav) | [System Recording](./audio/system_20260222_143000.wav)
+  **Audio**: [Mic Recording](./audio/mic.wav) | [System Recording](./audio/system.wav)
 
   ---
 
@@ -156,6 +162,7 @@ tachyon-transcripts/
   Great, any blockers?
   ```
 - Creates `audio/` subfolder alongside the markdown file
+- Multi-loopback sessions use `system_0.wav`, `system_1.wav`, etc. and `audio/device_manifest.json` for mapping
 - Output directory is configurable (default: `./output/` inside project)
 
 ### Step 6: System Tray (`ui/tray.py`)
@@ -167,7 +174,13 @@ tachyon-transcripts/
   - Set Microphone
   - Loopback Devices
   - Set Output Folder (opens folder picker dialog)
+  - Open Output Folder
+  - Setup Wizard
   - Quit
+- Top-of-menu informational state:
+  - Last recorded session timestamp
+  - Temporary status text during model loading/failure
+- Start Recording remains disabled until the transcription model reports ready
 - Tray icon changes color/state when recording (red dot = recording)
 - Runs in its own thread, communicates with main via callbacks
 
@@ -183,18 +196,19 @@ tachyon-transcripts/
 
 ### Step 8: Config (`config.py`)
 - Simple JSON config file stored in project directory
-- Settings: output_dir, model_size, hotkey, overlay_position, overlay_opacity, mic_device, loopback_devices, diarize_backend, hf_token
+- Settings: output_dir, model_size, compute_device, hotkey, overlay_position, overlay_opacity, mic_device, output_device, loopback_devices, diarize_backend, hf_token, first_run_complete, consent_acknowledged, reviewer_geometry, overlay_expanded_size
 - Defaults that work out of the box — zero config needed to start
 
 ### Step 9: Main Entry Point (`main.py`)
 - Wires all components together
 - Startup sequence:
   1. Load config
-  2. Initialize transcriber (load model — show splash/loading indicator)
-  3. Start system tray
-  4. Wait for user to click "Start Recording"
-  5. On start: create session, start capture, begin transcription
-  6. On stop: stop capture, finalize transcript, export markdown
+  2. Start tkinter root + first-run wizard when needed (consent + device selection)
+  3. Start tray + hotkey immediately with "model loading" status
+  4. Load transcription model on a background thread
+  5. Enable recording once model is ready
+  6. On start: create session, start capture, begin transcription
+  7. On stop: stop capture/transcriber, finalize transcript, export markdown
 - Clean shutdown handling
 
 ### Step 10: Launcher Scripts
@@ -224,7 +238,8 @@ tachyon-transcripts/
 ## Key Technical Details
 
 - **WASAPI Loopback**: Implemented via `PyAudioWPatch` (sounddevice is still used for mic capture). This provides reliable loopback on Windows and supports multi-device loopback capture.
-- **Whisper large-v3**: ~3GB model, ~4GB VRAM usage. 2080 Ti has 11GB so plenty of headroom.
+- **Hardware-aware Whisper config**: `large-v3` on >=10 GB VRAM GPUs, `medium` on 6-10 GB, `small` on <6 GB, and `distil-large-v3` on CPU.
+- **Graceful fallback**: if CUDA model load fails at startup, retry on CPU with int8 so the app still starts.
 - **Rolling buffer with word timestamps**: ~1s overlap prepended to each ~3s chunk. Word-level timestamps from faster-whisper allow precise trimming of the overlap region, eliminating duplicate text at chunk boundaries.
 - **VAD**: faster-whisper has built-in Silero VAD — automatically skips silent chunks.
 - **Resampling**: Devices are captured at native sample rates and resampled to 16kHz before Whisper. This avoids WASAPI errors from requesting unsupported rates.

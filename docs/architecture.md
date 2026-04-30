@@ -29,7 +29,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
                            ▼
 ┌──────────────────────────────────────────┐
 │        Transcriber (transcriber.py)       │
-│  - faster-whisper (large-v3, CUDA)       │
+│  - faster-whisper (hardware-aware auto)  │
 │  - Rolling buffer: ~1s overlap + ~3s new │
 │  - word_timestamps=True for trim logic   │
 │  - VAD to skip silence                   │
@@ -101,7 +101,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - `add_segment()` — thread-safe append
   - `get_recent(n)` — last N segments for overlay display
   - `get_all()` — full transcript for export
-  - On stop: triggers exporter
+  - Export is triggered by `main.py` on recording stop (session is storage/lifecycle only)
 
 ### `exporter.py` — Transcript Export
 - **Owns**: File generation — markdown transcript + JSON sidecar + audio file organization
@@ -137,6 +137,8 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
 - **Key details**:
   - Uses `pystray` for native Windows system tray
   - Menu: Start/Stop Recording, Show/Hide Captions, Review Transcripts, Set Microphone, Loopback Devices, Set Output Folder, Setup Wizard, Quit
+  - Shows informational status text while model loads/fails and a last-session timestamp row
+  - Start Recording is disabled until model load completes (`set_model_ready(True)`)
   - Icon changes state when recording (visual indicator)
   - Runs in its own thread
   - **Callback signatures are zero-arg intent forwards** — any handler that needs to touch tkinter (folder picker, wizard) is invoked without arguments, and the caller schedules the dialog onto the tkinter main thread via `root.after(0, ...)`. Tkinter widgets are never created from the pystray thread.
@@ -161,6 +163,12 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - `OVERLAY_SPEAKER_PALETTE`: 5-colour palette for non-"You" speakers in the overlay
   - `ToolTip` class: lightweight hover tooltip with 500ms delay, auto-positions below widget
 
+### `ui/widgets.py` — Shared Custom Tk Widgets
+- **Owns**: Reusable themed controls used by reviewer/overlay
+- **Key details**:
+  - `HoverButton`, `GlowFrame`, `GradientBar`, `PulseIndicator`, and `SessionCard`
+  - Centralises non-trivial widget behavior (hover animation, pulse, card selection state)
+
 ### `ui/overlay.py` — Caption Overlay
 - **Owns**: Live caption display
 - **Inputs**: Transcript segments via `queue.Queue`
@@ -169,6 +177,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - `tkinter` always-on-top transparent window with 1px border
   - Bottom-center screen position (subtitle-style)
   - Shows last 4 lines with speaker labels
+  - Displays muted placeholder text when caption history is empty (startup/new session)
   - Thread safety: polls `queue.Queue` every ~100ms via `root.after()`
   - Draggable, hotkey toggle (`Ctrl+Shift+T`)
   - Semi-transparent dark background, white text
@@ -220,12 +229,13 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Right panel: transcript viewer with multi-speaker coloring (8-color palette by order of appearance)
   - Inline speaker panel: shown between header and transcript after diarization — per-speaker rows with color dot, name entry, duration, sample text. Also accessible via "Edit Speakers" link on diarized versions.
   - Version dropdown: switch between original, batch, and diarized versions
-  - Bottom bar: re-transcribe button, identify speakers button, progress bar, status, open-folder
+  - Top toolbar: re-transcribe/diarize/edit controls, progress, backend + speaker-count + HF token controls, open-folder
+  - Bottom status bar: session count + shortcut hints
   - Session discovery via regex matching `YYYY-MM-DD_HHMMSS` folder names
 
 ### `main.py` — Entry Point
 - **Owns**: Component wiring, startup/shutdown sequence
-- **Startup**: Load config → Init transcriber (model load) → Start tray → Wait for user
+- **Startup**: Load config → run first-run wizard when needed → start tray/hotkey immediately → load model on background thread → enable recording when ready
 - **Recording flow**: Create session → Start capture → Begin transcription → User stops → Export
 - **Batch flow**: Open reviewer → Select session → Re-transcribe → Export versioned markdown
 - **Diarize flow**: Open reviewer → Select session + version → Identify Speakers → Inline speaker panel → Save Names → Export diarized markdown
@@ -293,6 +303,7 @@ installer/
 ├── Tachyon.iss             # Inno Setup 6 script — wraps dist\TachyonTranscripts\ in
 │                           #   a single setup.exe, creates Start Menu shortcuts
 ├── build_installer.bat     # End-to-end build (PyInstaller → Inno Setup)
+├── hooks/hook-webrtcvad.py # Local PyInstaller hook override for webrtcvad metadata
 ├── pre_install_notice.txt  # Legal disclaimer shown in the install wizard
 └── README.md               # Build procedure + known rough edges
 ```
@@ -308,7 +319,7 @@ Install-time behaviour:
 
 - Per-user install at `%LocalAppData%\Programs\Tachyon Transcripts` — no admin
   elevation (the installer is unsigned and forcing UAC adds no value).
-- Windows `icon.ico` generated by `scripts\make_icon.py` from the same design as the
+- Windows `assets/icon.ico` generated by `scripts\make_icon.py` from the same design as the
   tray icon, packed as a multi-resolution ICO (16/32/48/64/128/256 px).
 - Uninstall removes the install tree and cached model weights under `{app}\models\`
   but deliberately preserves user recordings.
@@ -316,8 +327,8 @@ Install-time behaviour:
 Known rough edges (tracked for v1.1):
 
 - Installer is not code-signed — SmartScreen will show a first-run warning.
-- Model download still happens at first launch if the user declined the post-install
-  step; there is no progress UI in the wizard yet.
+- If the user declined post-install model pre-download, first launch can still take a while for model fetch/load.
+  Tray status text is shown during this phase; wizard still has no dedicated progress UI.
 
 ## Key Constraints
 - **Local processing after setup** — runtime transcription/export is local; first-time setup/model downloads require internet unless caches are pre-seeded

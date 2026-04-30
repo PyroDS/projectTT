@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 # Regex for session folder names
 _SESSION_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$")
+_BACKEND_OPTIONS = ("speechbrain", "pyannote", "resemblyzer")
 
 
 # ---------------------------------------------------------------------------
@@ -826,19 +827,42 @@ class TranscriptReviewer:
         config_frame = tk.Frame(toolbar, bg=Color.bg_elevated)
         config_frame.pack(side=tk.RIGHT, padx=(0, 12))
 
-        open_folder_btn = HoverButton(
-            config_frame,
-            text="Open Folder",
-            icon="\U0001f4c2",
-            fg=Color.fg_primary,
-            bg=Color.btn_neutral,
-            hover_bg=Color.btn_neutral_hover,
-            font=(Font.family, Font.size_tiny),
-            padx=10,
-            pady=4,
-            command=self._on_open_folder,
+        self._backend_var = tk.StringVar(
+            value=self._initial_backend if self._initial_backend in _BACKEND_OPTIONS else "speechbrain",
         )
-        open_folder_btn.pack(side=tk.RIGHT, padx=(6, 0), pady=9)
+        self._backend_dropdown = ttk.Combobox(
+            config_frame,
+            textvariable=self._backend_var,
+            state="readonly",
+            values=list(_BACKEND_OPTIONS),
+            width=12,
+            font=(Font.family, Font.size_tiny),
+        )
+        self._backend_dropdown.pack(side=tk.RIGHT, padx=(0, 0), pady=7)
+        self._backend_dropdown.bind("<<ComboboxSelected>>", lambda e: self._on_backend_changed())
+
+        tk.Label(
+            config_frame, text="Backend:",
+            font=(Font.family, Font.size_tiny),
+            fg=Color.fg_secondary, bg=Color.bg_elevated,
+        ).pack(side=tk.RIGHT, padx=(6, 0), pady=7)
+
+        self._speaker_count_var = tk.StringVar(value="Auto")
+        self._speaker_count_dropdown = ttk.Combobox(
+            config_frame,
+            textvariable=self._speaker_count_var,
+            state="readonly",
+            values=["Auto", "2", "3", "4", "5", "6", "7", "8"],
+            width=5,
+            font=(Font.family, Font.size_tiny),
+        )
+        self._speaker_count_dropdown.pack(side=tk.RIGHT, padx=(6, 0), pady=7)
+
+        tk.Label(
+            config_frame, text="Speakers:",
+            font=(Font.family, Font.size_tiny),
+            fg=Color.fg_secondary, bg=Color.bg_elevated,
+        ).pack(side=tk.RIGHT, padx=(6, 0), pady=7)
 
         # HF Token management button (only visible when pyannote is selected)
         self._token_btn = tk.Button(
@@ -858,47 +882,19 @@ class TranscriptReviewer:
         if self._initial_backend == "pyannote":
             self._token_btn.pack(side=tk.RIGHT, padx=(6, 0), pady=7)
 
-        self._speaker_count_var = tk.StringVar(value="Auto")
-        self._speaker_count_dropdown = ttk.Combobox(
+        open_folder_btn = HoverButton(
             config_frame,
-            textvariable=self._speaker_count_var,
-            state="readonly",
-            values=["Auto", "2", "3", "4", "5", "6", "7", "8"],
-            width=5,
+            text="Open Folder",
+            icon="\U0001f4c2",
+            fg=Color.fg_primary,
+            bg=Color.btn_neutral,
+            hover_bg=Color.btn_neutral_hover,
             font=(Font.family, Font.size_tiny),
+            padx=10,
+            pady=4,
+            command=self._on_open_folder,
         )
-        self._speaker_count_dropdown.pack(side=tk.RIGHT, padx=(4, 0), pady=7)
-
-        tk.Label(
-            config_frame, text="Speakers:",
-            font=(Font.family, Font.size_tiny),
-            fg=Color.fg_secondary, bg=Color.bg_elevated,
-        ).pack(side=tk.RIGHT, padx=(6, 0), pady=7)
-
-        _BACKEND_OPTIONS = [
-            "speechbrain (default)",
-            "pyannote (HF token)",
-            "resemblyzer (lightweight)",
-        ]
-        _backend_to_display = {
-            "speechbrain": _BACKEND_OPTIONS[0],
-            "pyannote": _BACKEND_OPTIONS[1],
-            "resemblyzer": _BACKEND_OPTIONS[2],
-        }
-
-        self._backend_var = tk.StringVar(
-            value=_backend_to_display.get(self._initial_backend, _BACKEND_OPTIONS[0]),
-        )
-        self._backend_dropdown = ttk.Combobox(
-            config_frame,
-            textvariable=self._backend_var,
-            state="readonly",
-            values=_BACKEND_OPTIONS,
-            width=22,
-            font=(Font.family, Font.size_tiny),
-        )
-        self._backend_dropdown.pack(side=tk.RIGHT, padx=(4, 0), pady=7)
-        self._backend_dropdown.bind("<<ComboboxSelected>>", lambda e: self._on_backend_changed())
+        open_folder_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=9)
 
         # -- Tooltips --
         ToolTip(self._retranscribe_btn, "Re-transcribe with higher quality settings (Ctrl+R)")
@@ -1766,7 +1762,7 @@ class TranscriptReviewer:
             return
 
         # Extract backend key from dropdown display value
-        backend = self._backend_var.get().split()[0]  # e.g. "speechbrain"
+        backend = self._backend_var.get().strip()
         speaker_count_text = self._speaker_count_var.get().strip()
         num_speakers = int(speaker_count_text) if speaker_count_text.isdigit() else None
 
@@ -1903,7 +1899,7 @@ class TranscriptReviewer:
     def _is_pyannote_selected(self) -> bool:
         """Check if the pyannote backend is currently selected."""
         if hasattr(self, "_backend_var"):
-            return self._backend_var.get().startswith("pyannote")
+            return self._backend_var.get().strip() == "pyannote"
         return self._initial_backend == "pyannote"
 
     def _on_backend_changed(self) -> None:
@@ -1913,8 +1909,7 @@ class TranscriptReviewer:
     def _token_button_text(self) -> str:
         """Return display text for the HF token button."""
         if self._hf_token:
-            masked = self._hf_token[:6] + "..." + self._hf_token[-4:]
-            return f"HF: {masked}"
+            return "HF Saved"
         return "HF Token"
 
     def _update_token_btn(self) -> None:
@@ -2060,12 +2055,8 @@ class TranscriptReviewer:
         self._hf_token = hf_token
         # Update dropdown if window already exists
         if hasattr(self, "_backend_var"):
-            display_map = {
-                "speechbrain": "speechbrain (default)",
-                "pyannote": "pyannote (HF token)",
-                "resemblyzer": "resemblyzer (lightweight)",
-            }
-            self._backend_var.set(display_map.get(backend, "speechbrain (default)"))
+            resolved_backend = backend if backend in _BACKEND_OPTIONS else "speechbrain"
+            self._backend_var.set(resolved_backend)
         self._update_token_btn()
 
     def _pick_best_diarize_source(self) -> Optional[str]:

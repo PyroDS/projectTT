@@ -431,9 +431,14 @@ class TrayIcon:
         """
         if self._icon is None:
             return
-        self._icon.icon = self._create_icon(recording=self._recording)
-        self._icon.menu = self._build_menu()
-        self._icon.update_menu()
+        try:
+            self._icon.icon = self._create_icon(recording=self._recording)
+            self._icon.menu = self._build_menu()
+            self._icon.update_menu()
+        except Exception:
+            # State updates may arrive from non-tray threads (e.g. model-load
+            # worker). Keep running even if pystray rejects a particular update.
+            logger.warning("Tray refresh failed", exc_info=True)
 
     def set_recording(self, active: bool) -> None:
         """Update the tray to reflect whether a recording session is active.
@@ -516,9 +521,12 @@ class TrayIcon:
         self._status_text = text
         logger.debug("Tray status set to %r", text)
         if self._icon is not None:
-            self._icon.title = (
-                f"Tachyon Transcripts — {text}" if text else "Tachyon Transcripts"
-            )
+            try:
+                self._icon.title = (
+                    f"Tachyon Transcripts — {text}" if text else "Tachyon Transcripts"
+                )
+            except Exception:
+                logger.warning("Tray title update failed", exc_info=True)
         self._refresh()
 
     def set_model_ready(self, ready: bool) -> None:
@@ -562,7 +570,10 @@ class TrayIcon:
             logger.warning("notify() called before tray icon started — ignored")
             return
         logger.debug("Notification: %s — %s", title, message)
-        self._icon.notify(message, title=title)
+        try:
+            self._icon.notify(message, title=title)
+        except Exception:
+            logger.warning("Tray notification failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Lifecycle

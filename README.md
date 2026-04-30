@@ -107,7 +107,7 @@ All settings live in `config.json` (next to the app). Relevant keys:
 
 ## Troubleshooting
 
-**"Loading model…" takes forever on first launch.** The Whisper model is being downloaded (~1 GB). If you're on the installer, you can decline the post-install download and the model will be fetched here instead. Later launches are fast.
+**"Loading model…" takes forever on first launch.** The Whisper model is being downloaded (size depends on hardware/model; often ~600 MB to ~1 GB). During this phase the tray menu shows a status line and recording stays disabled until loading finishes. If you're on the installer and declined the post-install pre-download, the model is fetched on first launch instead. Later launches are fast.
 
 **"Failed to load the transcription model."** Check `tachyon.log` in the install directory. Common causes: no internet on first run, antivirus quarantined a CUDA DLL, graphics driver older than CUDA 12 requires. The app will still load but recording is disabled — fix the cause and restart.
 

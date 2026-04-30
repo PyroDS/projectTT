@@ -1,58 +1,47 @@
 """Pre-download the appropriate Whisper model for the detected hardware.
 
-Called by setup.bat during first-time setup.  Detects whether the host
-has a compatible NVIDIA GPU; if yes, downloads ``large-v3`` for CUDA
-(float16); if no, downloads ``distil-large-v3`` for CPU (int8).
-
-Runs detection without importing the ``tachyon`` package so it works in
-the setup.bat environment before PYTHONPATH is configured.
+Called by setup.bat during first-time setup. Uses the same hardware
+resolution policy as runtime (`tachyon.hardware.resolve_transcriber_config`)
+so setup pre-downloads the model the app will actually try to use.
 """
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 
-def _has_cuda() -> tuple[bool, str, float]:
-    """Return ``(has_cuda, device_name, vram_gb)`` using torch.
+def _bootstrap_src_path() -> None:
+    """Ensure ``src/`` is importable when running from project root."""
+    project_root = Path(__file__).resolve().parent.parent
+    src_path = project_root / "src"
+    if str(src_path) not in sys.path:
+        sys.path.insert(0, str(src_path))
 
-    torch is always installed by setup.bat before this script runs (it
-    is a hard dependency of speechbrain/resemblyzer), so we rely on it
-    instead of the lighter NVML path.
-    """
+
+def _resolve_target_model() -> tuple[str, str, str, str]:
+    """Return ``(model_size, device, compute_type, hw_summary)``."""
+    _bootstrap_src_path()
     try:
-        import torch  # type: ignore
-
-        if torch.cuda.is_available():
-            idx = 0
-            name = torch.cuda.get_device_name(idx)
-            props = torch.cuda.get_device_properties(idx)
-            vram_gb = props.total_memory / (1024 ** 3)
-            return True, name, vram_gb
+        from tachyon.hardware import resolve_transcriber_config
+        device, model_size, compute_type, hw = resolve_transcriber_config(
+            requested_device="auto",
+            requested_model_size="auto",
+        )
+        return model_size, device, compute_type, hw.summary
     except Exception as exc:  # noqa: BLE001
-        print(f"  [warn] torch CUDA check failed: {exc}", file=sys.stderr)
-    return False, "", 0.0
-
-
-def _recommend_model(has_cuda: bool, vram_gb: float) -> tuple[str, str, str]:
-    """Return ``(model_size, device, compute_type)`` for the detected hw."""
-    if has_cuda:
-        if vram_gb >= 10.0:
-            return "large-v3", "cuda", "float16"
-        if vram_gb >= 6.0:
-            return "medium", "cuda", "float16"
-        return "small", "cuda", "float16"
-    return "distil-large-v3", "cpu", "int8"
+        raise RuntimeError(f"hardware resolution failed: {exc}") from exc
 
 
 def main() -> int:
-    has_cuda, name, vram_gb = _has_cuda()
-    if has_cuda:
-        print(f"  Detected GPU: {name} ({vram_gb:.1f} GB VRAM)")
-    else:
-        print("  No NVIDIA GPU detected — using CPU model.")
+    try:
+        model_size, device, compute_type, hw_summary = _resolve_target_model()
+        print(f"  Detected hardware: {hw_summary}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [warn] {exc}", file=sys.stderr)
+        print("  Falling back to CPU default model selection.")
+        model_size, device, compute_type = "distil-large-v3", "cpu", "int8"
 
-    model_size, device, compute_type = _recommend_model(has_cuda, vram_gb)
     print(f"  Downloading '{model_size}' for {device} ({compute_type}) ...")
 
     from faster_whisper import WhisperModel  # type: ignore

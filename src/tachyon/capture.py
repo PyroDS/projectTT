@@ -62,12 +62,13 @@ class AudioChunk:
         source: ``"you"`` for microphone audio, ``"them"`` for system/loopback
                 (single device), or ``"them:Label"`` for multi-loopback.
         audio:  1-D numpy array of float32 samples at 16 kHz mono.
-        timestamp: ``time.time()`` wall-clock time when this chunk was captured.
+        timestamp: Wall-clock ``time.time()`` corresponding to the start of
+            this chunk's audio (not enqueue/flush time).
     """
 
     source: str          # "you" | "them" | "them:Label"
     audio: np.ndarray    # float32, 16 kHz, mono
-    timestamp: float     # time.time()
+    timestamp: float     # wall-clock start time of chunk audio
 
 
 @dataclass
@@ -577,10 +578,13 @@ class AudioCapture:
 
         resampled = resampled.astype(np.float32, copy=False)
 
+        # ``timestamp`` is defined as the wall-clock start of this chunk's
+        # audio so downstream timestamp math stays aligned to speech onset.
+        chunk_start = time.time() - (len(resampled) / TARGET_SAMPLERATE)
         chunk = AudioChunk(
             source=source,
             audio=resampled,
-            timestamp=time.time(),
+            timestamp=chunk_start,
         )
 
         try:
@@ -607,10 +611,13 @@ class AudioCapture:
 
         resampled = resampled.astype(np.float32, copy=False)
 
+        # ``timestamp`` is defined as the wall-clock start of this chunk's
+        # audio so downstream timestamp math stays aligned to speech onset.
+        chunk_start = time.time() - (len(resampled) / TARGET_SAMPLERATE)
         chunk = AudioChunk(
             source=state.source_tag,
             audio=resampled,
-            timestamp=time.time(),
+            timestamp=chunk_start,
         )
 
         try:
