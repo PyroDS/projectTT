@@ -13,6 +13,49 @@ logger = logging.getLogger(__name__)
 # Project root is two levels up from this file: src/tachyon/config.py -> project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
+LIVE_CAPTION_MODES: tuple[str, ...] = ("fast", "balanced", "accurate")
+
+
+@dataclass(frozen=True)
+class LiveCaptionProfile:
+    """Runtime tuning knobs for live caption responsiveness."""
+
+    chunk_duration_sec: float
+    overlap_sec: float
+    beam_size: int
+
+
+LIVE_CAPTION_PROFILES: dict[str, LiveCaptionProfile] = {
+    "fast": LiveCaptionProfile(
+        chunk_duration_sec=1.5,
+        overlap_sec=0.5,
+        beam_size=1,
+    ),
+    "balanced": LiveCaptionProfile(
+        chunk_duration_sec=2.0,
+        overlap_sec=0.75,
+        beam_size=1,
+    ),
+    "accurate": LiveCaptionProfile(
+        chunk_duration_sec=3.0,
+        overlap_sec=1.0,
+        beam_size=2,
+    ),
+}
+
+
+def normalize_live_caption_mode(mode: Optional[str]) -> str:
+    """Return a valid live caption mode, falling back to ``balanced``."""
+    if isinstance(mode, str):
+        normalized = mode.strip().lower()
+        if normalized in LIVE_CAPTION_MODES:
+            return normalized
+    return "balanced"
+
+
+def get_live_caption_profile(mode: Optional[str]) -> LiveCaptionProfile:
+    """Resolve a mode string to a concrete live caption profile."""
+    return LIVE_CAPTION_PROFILES[normalize_live_caption_mode(mode)]
 
 
 @dataclass
@@ -40,6 +83,7 @@ class Config:
     model_size: str = "auto"  # "auto" picks by hardware; or "large-v3"/"medium"/"small"/"distil-large-v3"
     compute_device: str = "auto"  # "auto", "cuda", or "cpu"
     hotkey: str = "ctrl+shift+t"
+    live_caption_mode: str = "balanced"  # "fast", "balanced", or "accurate"
     overlay_position: Optional[tuple[int, int]] = None  # None = auto center-bottom
     overlay_opacity: float = 0.8
     mic_device: Optional[str] = None  # None = system default
@@ -118,7 +162,9 @@ class Config:
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in data.items() if k in valid_keys}
 
-        return cls(**filtered)
+        cfg = cls(**filtered)
+        cfg.live_caption_mode = normalize_live_caption_mode(cfg.live_caption_mode)
+        return cfg
 
     def save(self, path: Path = DEFAULT_CONFIG_PATH) -> None:
         """Write the current config to a JSON file.
@@ -129,6 +175,9 @@ class Config:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         data = asdict(self)
+        data["live_caption_mode"] = normalize_live_caption_mode(
+            data.get("live_caption_mode")
+        )
         # Convert tuple to list for JSON serialization (tuples become arrays)
         if data["overlay_position"] is not None:
             data["overlay_position"] = list(data["overlay_position"])

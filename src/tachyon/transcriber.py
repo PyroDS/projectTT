@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Number of samples of overlap to prepend from the previous chunk.
 # At 16 kHz this is ~1 second of audio context for the model.
 OVERLAP_SAMPLES: int = 16_000
+SAMPLE_RATE_HZ: int = 16_000
 
 
 def _classify_runtime_error(exc: Exception) -> tuple[bool, str, str]:
@@ -160,6 +161,8 @@ class Transcriber:
         model_size: str = "auto",
         device: str = "auto",
         compute_type: str = "auto",
+        overlap_sec: float = 1.0,
+        beam_size: int = 1,
     ) -> None:
         self._queue: queue.Queue = chunk_queue
         self._on_segment: Callable[[TranscriptSegment], Any] = on_segment
@@ -169,6 +172,8 @@ class Transcriber:
         self._requested_model_size: str = model_size
         self._requested_device: str = device
         self._requested_compute_type: str = compute_type
+        self._overlap_samples: int = OVERLAP_SAMPLES
+        self._beam_size: int = max(int(beam_size), 1)
 
         # Resolved configuration (populated by load_model).  These reflect
         # the actual device/model the engine is running on -- which may
@@ -199,8 +204,9 @@ class Transcriber:
 
         # Per-source rolling overlap buffers.  Keys are source tags
         # ("you" / "them"), values are 1-D float32 arrays of the last
-        # OVERLAP_SAMPLES samples from the previous chunk for that source.
+        # configured overlap samples from the previous chunk for that source.
         self._overlap_buffers: Dict[str, np.ndarray] = {}
+        self.configure_live_settings(overlap_sec=overlap_sec, beam_size=beam_size)
 
     # ------------------------------------------------------------------
     # Model lifecycle
@@ -357,6 +363,18 @@ class Transcriber:
         self._session_start_time = start_time if start_time is not None else time.time()
         logger.info("Session start time set to %.3f", self._session_start_time)
 
+    def configure_live_settings(
+        self,
+        overlap_sec: Optional[float] = None,
+        beam_size: Optional[int] = None,
+    ) -> None:
+        """Update live transcription tuning used by chunk processing."""
+        if overlap_sec is not None:
+            overlap = max(float(overlap_sec), 0.0)
+            self._overlap_samples = int(round(overlap * SAMPLE_RATE_HZ))
+        if beam_size is not None:
+            self._beam_size = max(int(beam_size), 1)
+
     # ------------------------------------------------------------------
     # Worker thread start / stop
     # ------------------------------------------------------------------
@@ -493,13 +511,13 @@ class Transcriber:
         else:
             combined = new_audio
 
-        # The number of overlap samples actually prepended (may be < OVERLAP_SAMPLES
-        # for the very first chunk of a source).
+        # The number of overlap samples actually prepended (may be smaller
+        # than the configured overlap for the very first chunk of a source).
         overlap_len: int = overlap.size
 
         # Overlap duration in seconds -- words before this offset are from
         # the previous chunk and must be discarded.
-        overlap_duration: float = overlap_len / 16_000.0
+        overlap_duration: float = overlap_len / float(SAMPLE_RATE_HZ)
 
         # --- 3. Transcribe the combined buffer ----------------------------
         assert self._model is not None  # guaranteed by start() guard
@@ -508,6 +526,7 @@ class Transcriber:
             language="en",
             vad_filter=True,
             word_timestamps=True,
+            beam_size=self._beam_size,
         )
 
         # --- 4. Collect words that fall within the NEW audio portion ------
@@ -562,8 +581,8 @@ class Transcriber:
             )
 
         # --- 6. Save the tail of the current chunk as the next overlap ----
-        if new_audio.size >= OVERLAP_SAMPLES:
-            self._overlap_buffers[source] = new_audio[-OVERLAP_SAMPLES:].copy()
+        if self._overlap_samples > 0 and new_audio.size >= self._overlap_samples:
+            self._overlap_buffers[source] = new_audio[-self._overlap_samples:].copy()
         else:
             # Chunk is shorter than the desired overlap -- keep all of it.
             self._overlap_buffers[source] = new_audio.copy()

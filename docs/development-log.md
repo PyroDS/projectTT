@@ -37,6 +37,44 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-30 — Live caption modes (Fast / Balanced / Accurate)
+
+**What was done:**
+- Added persisted live caption profiles in `src/tachyon/config.py`:
+  - New `live_caption_mode` config field with default `"balanced"`.
+  - Added `LiveCaptionProfile` + `LIVE_CAPTION_PROFILES` with mode-specific chunk/overlap/beam settings.
+  - Added `normalize_live_caption_mode()` and `get_live_caption_profile()` helpers for safe fallback.
+- Made capture chunk sizing configurable in `src/tachyon/capture.py`:
+  - `AudioCapture` now accepts `chunk_duration_sec` and uses it in both mic and loopback flush thresholds.
+- Made live transcriber tuning configurable in `src/tachyon/transcriber.py`:
+  - Added runtime tuning knobs for overlap seconds and `beam_size`.
+  - `model.transcribe(...)` now uses configured `beam_size`.
+  - Overlap buffer length now uses per-mode overlap sample count instead of a fixed compile-time constant.
+- Wired live mode into app startup/recording flow in `src/tachyon/main.py`:
+  - Recording start resolves profile and applies: capture chunk duration + transcriber overlap/beam settings.
+  - Added tray callback handling to persist mode changes.
+  - Added user-facing notification when mode is changed mid-recording: new mode is saved immediately and applies next recording.
+- Added tray mode selection UI in `src/tachyon/ui/tray.py`:
+  - New `Live Caption Mode` submenu with `Fast Live`, `Balanced Live`, `Accurate Live`.
+  - Current mode is shown via existing checkmark-prefix pattern.
+- Added regression tests:
+  - `tests/test_config.py`: default mode, invalid-mode fallback, and profile table assertions.
+  - `tests/test_capture_timestamps.py`: chunk flush threshold follows configured chunk duration.
+  - `tests/test_transcriber_labels.py`: verifies configured beam size is forwarded and overlap behavior trims correctly.
+
+**Decisions made:**
+- Kept model loading behavior unchanged (no per-mode model reload) to avoid startup/recording complexity; live responsiveness is tuned via chunk size, overlap, and beam size.
+- Allowed mode selection during recording and persisted immediately, but deferred runtime effect to next recording for predictable behavior and simpler thread/model lifecycle handling.
+- Kept `balanced` as default mode for a quality/latency middle ground.
+
+**Verification:**
+- `python -m pytest tests/test_config.py tests/test_transcriber_labels.py` — 12 passed.
+- `ReadLints` on edited source/test files — no diagnostics.
+- Attempted `tests/test_capture_timestamps.py` run in this environment failed during import due missing `pyaudiowpatch`; test logic added and expected to run in project runtime environment where audio deps are installed.
+
+**Issues encountered:**
+- Local test environment missing `pyaudiowpatch` prevented running capture tests end-to-end here.
+
 ### 2026-04-30 — CUDA runtime bundling + actionable failure UX
 
 **What was done:**

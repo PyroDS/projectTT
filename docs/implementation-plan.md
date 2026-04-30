@@ -26,7 +26,7 @@ Build a local-first, covert meeting transcription tool for Windows. Captures mic
 ┌──────────────────────────────────────────┐
 │        Transcriber (transcriber.py)       │
 │  - faster-whisper (auto hardware select) │
-│  - ~3-5 sec chunk processing             │
+│  - Profile-driven live chunk processing  │
 │  - VAD to skip silence                   │
 │  - Returns: text, start_time, end_time   │
 └────────────┬─────────────┬───────────────┘
@@ -110,7 +110,7 @@ tachyon-transcripts/
 - **System stream(s)**: Open WASAPI loopback stream(s) on selected output device(s) at native sample rates
 - **Resampling**: Capture at each device's native sample rate and resample to 16kHz (what Whisper expects) before queuing. Use `soxr` or `scipy.signal.resample` — don't assume devices will natively support 16kHz.
 - Mic runs in sounddevice callback thread; each loopback device runs in a PyAudio callback thread
-- Audio chunks (~3 seconds) placed into a shared `queue.Queue` with metadata: `{source: "you"|"them"|"them:Label", audio: np.array, timestamp: float}`
+- Audio chunks are profile-driven (`Fast`=1.5s, `Balanced`=2.0s, `Accurate`=3.0s) and placed into a shared `queue.Queue` with metadata: `{source: "you"|"them"|"them:Label", audio: np.array, timestamp: float}`
 - **Audio file storage**: Save full uncompressed audio to WAV files per session, organized as:
   ```
   output/
@@ -132,6 +132,7 @@ tachyon-transcripts/
 - Returns `TranscriptSegment(speaker, text, start_time, end_time)`
 - Emits segments via a callback so overlay + session can both consume
 - **Chunk boundary handling**: Use a rolling buffer approach instead of naive stitching. Each chunk sent to Whisper is ~3s of new audio prepended with ~1s from the previous chunk. Use word-level timestamps to identify and trim the overlapping portion, keeping only text corresponding to the new audio. This avoids duplicate/split words at boundaries without fragile dedup heuristics.
+- **Live caption modes**: expose `Fast Live`, `Balanced Live` (default), and `Accurate Live` via tray menu. Modes tune chunk duration, overlap, and decode beam size; changing mode mid-recording should persist immediately but apply on the next recording with user-facing feedback.
 
 ### Step 4: Session Manager (`session.py`)
 - `Session` class — created per recording
@@ -241,7 +242,7 @@ tachyon-transcripts/
 - **Hardware-aware Whisper config**: `large-v3` on >=10 GB VRAM GPUs, `medium` on 6-10 GB, `small` on <6 GB, and `distil-large-v3` on CPU.
 - **Graceful fallback**: if CUDA model load fails at startup, retry on CPU with int8 so the app still starts.
 - **Runtime CUDA failure UX**: if CUDA fails during live inference (e.g. missing `cublas64_12.dll`), stop transcription cleanly, keep audio capture running, and show actionable tray guidance (`reinstall`, `check AV quarantine`, `update driver`, or `compute_device="cpu"`).
-- **Rolling buffer with word timestamps**: ~1s overlap prepended to each ~3s chunk. Word-level timestamps from faster-whisper allow precise trimming of the overlap region, eliminating duplicate text at chunk boundaries.
+- **Rolling buffer with word timestamps**: overlap/new-audio sizing is profile-driven for live mode (`fast`: 0.5s+1.5s, `balanced`: 0.75s+2.0s, `accurate`: 1.0s+3.0s). Word-level timestamps from faster-whisper trim overlap text to avoid boundary duplicates.
 - **VAD**: faster-whisper has built-in Silero VAD — automatically skips silent chunks.
 - **Resampling**: Devices are captured at native sample rates and resampled to 16kHz before Whisper. This avoids WASAPI errors from requesting unsupported rates.
 - **Threading model**: Audio capture (1 mic callback + N loopback callbacks) → Queue → Transcriber (1 thread) → `queue.Queue` → UI thread (tkinter polls via `root.after()`)

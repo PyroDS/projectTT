@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tachyon.config import Config
+from tachyon.config import Config, get_live_caption_profile, normalize_live_caption_mode
 
 
 def test_load_defaults_when_file_missing(tmp_path: Path) -> None:
@@ -13,6 +13,7 @@ def test_load_defaults_when_file_missing(tmp_path: Path) -> None:
     assert cfg.model_size == "auto"
     assert cfg.compute_device == "auto"
     assert cfg.hotkey == "ctrl+shift+t"
+    assert cfg.live_caption_mode == "balanced"
     assert cfg.first_run_complete is False
     assert cfg.consent_acknowledged is False
 
@@ -73,4 +74,24 @@ def test_get_active_loopback_devices_returns_configured_entries() -> None:
     devices = cfg.get_active_loopback_devices()
     assert [d.device_name for d in devices] == ["A", "C"]
     assert [d.label for d in devices] == ["Alpha", "Gamma"]
+
+
+def test_load_invalid_live_caption_mode_falls_back_to_balanced(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"live_caption_mode": "turbo"}), encoding="utf-8")
+    cfg = Config.load(path)
+    assert cfg.live_caption_mode == "balanced"
+
+
+def test_live_caption_profile_lookup_returns_expected_values() -> None:
+    fast = get_live_caption_profile("fast")
+    balanced = get_live_caption_profile("balanced")
+    accurate = get_live_caption_profile("accurate")
+    fallback = get_live_caption_profile("invalid")
+
+    assert (fast.chunk_duration_sec, fast.overlap_sec, fast.beam_size) == (1.5, 0.5, 1)
+    assert (balanced.chunk_duration_sec, balanced.overlap_sec, balanced.beam_size) == (2.0, 0.75, 1)
+    assert (accurate.chunk_duration_sec, accurate.overlap_sec, accurate.beam_size) == (3.0, 1.0, 2)
+    assert fallback == balanced
+    assert normalize_live_caption_mode("FAST") == "fast"
 

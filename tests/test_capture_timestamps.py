@@ -27,3 +27,21 @@ def test_flush_buffer_sets_chunk_timestamp_to_audio_start(monkeypatch) -> None:
     assert emitted.audio.size == chunk.size
     assert emitted.timestamp == 100.0
 
+
+def test_mic_callback_flushes_using_configured_chunk_duration() -> None:
+    q: queue.Queue = queue.Queue(maxsize=4)
+    capture = AudioCapture(chunk_queue=q, chunk_duration_sec=1.5)
+    capture._mic_native_sr = TARGET_SAMPLERATE  # noqa: SLF001
+
+    half_second = np.ones(TARGET_SAMPLERATE // 2, dtype=np.float32)
+    indata = half_second.reshape(-1, 1)
+
+    capture._mic_callback(indata, indata.shape[0], None, None)  # noqa: SLF001
+    capture._mic_callback(indata, indata.shape[0], None, None)  # noqa: SLF001
+    assert q.empty()
+
+    capture._mic_callback(indata, indata.shape[0], None, None)  # noqa: SLF001
+    emitted = q.get_nowait()
+    assert emitted.source == "you"
+    assert emitted.audio.size == int(TARGET_SAMPLERATE * 1.5)
+

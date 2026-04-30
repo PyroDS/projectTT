@@ -119,7 +119,11 @@ def _set_windows_app_user_model_id() -> None:
         pass
 
 
-from tachyon.config import Config, LoopbackDevice
+from tachyon.config import (
+    Config,
+    get_live_caption_profile,
+    normalize_live_caption_mode,
+)
 from tachyon.hotkey import HotkeyListener
 from tachyon.capture import AudioCapture
 from tachyon.transcriber import Transcriber
@@ -216,6 +220,16 @@ def _discover_wav_files(audio_dir: Path) -> list[Path]:
     return wav_files
 
 
+def _live_mode_display_name(mode: str) -> str:
+    """Return user-facing caption mode labels for notifications."""
+    names = {
+        "fast": "Fast Live",
+        "balanced": "Balanced Live",
+        "accurate": "Accurate Live",
+    }
+    return names.get(normalize_live_caption_mode(mode), "Balanced Live")
+
+
 class App:
     """Main application controller.
 
@@ -225,6 +239,9 @@ class App:
 
     def __init__(self) -> None:
         self._config = Config.load()
+        self._config.live_caption_mode = normalize_live_caption_mode(
+            self._config.live_caption_mode
+        )
         logger.info("Config loaded: %s", self._config)
 
         # Shared queues
@@ -277,6 +294,7 @@ class App:
             on_open_output_folder=self._on_open_output_folder,
             on_set_mic_device=self._on_set_mic_device,
             on_set_loopback_devices=self._on_set_loopback_devices,
+            on_set_live_caption_mode=self._on_set_live_caption_mode,
             on_review=self._on_review,
             on_quit=self._on_quit,
             on_show_wizard=self._on_show_wizard,
@@ -287,6 +305,7 @@ class App:
             [d.get("device_name", "") for d in self._config.loopback_devices
              if d.get("enabled", True) and d.get("device_name")]
         )
+        self._tray.set_live_caption_mode(self._config.live_caption_mode)
 
     # ------------------------------------------------------------------
     # Startup
@@ -589,6 +608,11 @@ class App:
 
         # Set session start time on transcriber for relative timestamps
         self._transcriber.set_session_start_time(self._session.start_time)
+        live_profile = get_live_caption_profile(self._config.live_caption_mode)
+        self._transcriber.configure_live_settings(
+            overlap_sec=live_profile.overlap_sec,
+            beam_size=live_profile.beam_size,
+        )
 
         # Prepare output directory
         output_dir = self._config.get_output_path()
@@ -607,6 +631,7 @@ class App:
             mic_device=self._config.mic_device,
             output_device=self._config.output_device,
             loopback_configs=loopback_configs if loopback_configs else None,
+            chunk_duration_sec=live_profile.chunk_duration_sec,
         )
         try:
             self._capture.start(audio_dir)
@@ -834,6 +859,32 @@ class App:
             ]
         self._config.save()
         logger.info("Loopback devices set to %s", device_names or ["System Default"])
+
+    def _on_set_live_caption_mode(self, mode: str) -> None:
+        """Persist live caption mode changes from tray selection."""
+        normalized = normalize_live_caption_mode(mode)
+        old_mode = normalize_live_caption_mode(self._config.live_caption_mode)
+        if normalized == old_mode:
+            self._tray.set_live_caption_mode(normalized)
+            return
+
+        self._config.live_caption_mode = normalized
+        self._config.save()
+        self._tray.set_live_caption_mode(normalized)
+        logger.info("Live caption mode set to %s", normalized)
+
+        label = _live_mode_display_name(normalized)
+        if self._recording:
+            self._tray.notify(
+                "Tachyon Transcripts",
+                f"Live caption mode changed to {label}. "
+                "It will apply to your next recording.",
+            )
+        else:
+            self._tray.notify(
+                "Tachyon Transcripts",
+                f"Live caption mode set to {label}.",
+            )
 
     @staticmethod
     def _extract_label(device_name: str) -> str:

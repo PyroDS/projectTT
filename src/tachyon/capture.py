@@ -131,11 +131,13 @@ class AudioCapture:
         mic_device: Optional[str | int] = None,
         output_device: Optional[str | int] = None,
         loopback_configs: Optional[list] = None,
+        chunk_duration_sec: float = CHUNK_DURATION_SEC,
     ) -> None:
         self._chunk_queue = chunk_queue
         self._mic_device_hint = mic_device
         self._output_device_hint = output_device
         self._loopback_configs = loopback_configs or []
+        self._chunk_duration_sec = max(float(chunk_duration_sec), 0.25)
 
         # Stream handles (set in start())
         self._mic_stream: Optional[sd.InputStream] = None
@@ -506,7 +508,7 @@ class AudioCapture:
         self._mic_buffer.append(mono)
         self._mic_buffer_samples += len(mono)
 
-        samples_per_chunk = int(self._mic_native_sr * CHUNK_DURATION_SEC)
+        samples_per_chunk = int(self._mic_native_sr * self._chunk_duration_sec)
         if self._mic_buffer_samples >= samples_per_chunk:
             self._flush_buffer("you")
 
@@ -544,7 +546,7 @@ class AudioCapture:
         state.buffer.append(mono)
         state.buffer_samples += len(mono)
 
-        samples_per_chunk = int(state.native_sr * CHUNK_DURATION_SEC)
+        samples_per_chunk = int(state.native_sr * self._chunk_duration_sec)
         if state.buffer_samples >= samples_per_chunk:
             self._flush_loopback_buffer(state)
 

@@ -39,6 +39,7 @@ from PIL import Image, ImageDraw, ImageFont
 import pystray
 
 from tachyon.capture import AudioCapture
+from tachyon.config import LIVE_CAPTION_MODES, normalize_live_caption_mode
 from tachyon.ui.theme import Dim
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,7 @@ class TrayIcon:
         on_open_output_folder: Callable[[], None],
         on_set_mic_device: Callable[[Optional[str]], None],
         on_set_loopback_devices: Callable[[list], None],
+        on_set_live_caption_mode: Callable[[str], None],
         on_review: Callable[[], None],
         on_quit: Callable[[], None],
         on_show_wizard: Optional[Callable[[], None]] = None,
@@ -167,6 +169,7 @@ class TrayIcon:
         self._on_open_output_folder = on_open_output_folder
         self._on_set_mic_device = on_set_mic_device
         self._on_set_loopback_devices = on_set_loopback_devices
+        self._on_set_live_caption_mode = on_set_live_caption_mode
         self._on_review = on_review
         self._on_quit = on_quit
         self._on_show_wizard = on_show_wizard
@@ -175,6 +178,7 @@ class TrayIcon:
         self._captions_visible: bool = True
         self._current_mic: Optional[str] = None
         self._current_loopbacks: list[str] = []  # list of enabled device names
+        self._live_caption_mode: str = "balanced"
         self._batch_running: bool = False
         self._last_session_time: Optional[datetime] = None
         self._status_text: Optional[str] = None
@@ -230,6 +234,7 @@ class TrayIcon:
 
         # Build loopback device submenu
         loopback_submenu_items = self._build_loopback_submenu()
+        live_mode_submenu_items = self._build_live_mode_submenu()
 
         # Review transcripts — disabled during recording
         review_enabled = not self._recording
@@ -255,6 +260,7 @@ class TrayIcon:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Set Microphone", pystray.Menu(*mic_submenu_items)),
             pystray.MenuItem("Loopback Devices", pystray.Menu(*loopback_submenu_items)),
+            pystray.MenuItem("Live Caption Mode", pystray.Menu(*live_mode_submenu_items)),
             pystray.MenuItem("Set Output Folder...", self._handle_set_output_folder),
             pystray.MenuItem("Open Output Folder", self._handle_open_output_folder),
         ]
@@ -412,6 +418,33 @@ class TrayIcon:
         self._on_set_loopback_devices(list(self._current_loopbacks))
         self._refresh()
 
+    def _build_live_mode_submenu(self) -> list[pystray.MenuItem]:
+        """Build mode-selection submenu for live caption speed/quality profiles."""
+        mode_labels = {
+            "fast": "Fast Live",
+            "balanced": "Balanced Live",
+            "accurate": "Accurate Live",
+        }
+
+        def _make_handler(mode: str):
+            return lambda icon, item: self._handle_set_live_mode(mode)
+
+        selected = normalize_live_caption_mode(self._live_caption_mode)
+        return [
+            pystray.MenuItem(
+                f"{'* ' if mode == selected else '  '}{mode_labels[mode]}",
+                _make_handler(mode),
+            )
+            for mode in LIVE_CAPTION_MODES
+        ]
+
+    def _handle_set_live_mode(self, mode: str) -> None:
+        """Set and persist the live caption mode through the app callback."""
+        normalized = normalize_live_caption_mode(mode)
+        self._live_caption_mode = normalized
+        self._on_set_live_caption_mode(normalized)
+        self._refresh()
+
     def _handle_review(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
         logger.debug("Menu: Review Transcripts")
         self._on_review()
@@ -507,6 +540,11 @@ class TrayIcon:
             List of device name strings.  Empty list means system default.
         """
         self._current_loopbacks = list(device_names)
+        self._refresh()
+
+    def set_live_caption_mode(self, mode: str) -> None:
+        """Update the selected live caption mode shown in the tray menu."""
+        self._live_caption_mode = normalize_live_caption_mode(mode)
         self._refresh()
 
     def set_status(self, text: Optional[str]) -> None:

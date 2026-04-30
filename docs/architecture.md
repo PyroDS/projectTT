@@ -30,7 +30,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
 ┌──────────────────────────────────────────┐
 │        Transcriber (transcriber.py)       │
 │  - faster-whisper (hardware-aware auto)  │
-│  - Rolling buffer: ~1s overlap + ~3s new │
+│  - Rolling buffer: profile-driven overlap │
 │  - word_timestamps=True for trim logic   │
 │  - VAD to skip silence                   │
 │  - Returns: text, start_time, end_time   │
@@ -69,7 +69,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Captures at device native sample rate, resamples to 16kHz mono via `soxr`
   - Mic stream via sounddevice; loopback stream(s) via PyAudioWPatch (sounddevice's PortAudio DLL lacks WASAPI loopback support)
   - **Multi-loopback**: supports capturing from multiple output devices simultaneously (e.g., Arctis 7 Chat + Game). Each loopback device gets its own `_LoopbackState` with independent stream, WAV writer, buffer, and resampler.
-  - Chunks are ~3 seconds of 16kHz float32 audio
+  - Chunk duration is driven by `live_caption_mode`: `fast`=1.5s, `balanced`=2.0s (default), `accurate`=3.0s
   - Queue items: `AudioChunk(source="you"|"them"|"them:Label", audio=np.ndarray, timestamp=float)`
   - Source tag convention: `"you"` (mic), `"them"` (single loopback, backward compatible), `"them:Chat"` / `"them:Game"` (multi-loopback with labels)
   - Writes full session audio: `mic.wav` + `system.wav` (single) or `system_0.wav`, `system_1.wav`, ... (multi)
@@ -86,7 +86,10 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - **Graceful CUDA→CPU fallback**: if CUDA load fails (missing DLL, OOM, etc.), automatically retries on CPU with `int8` compute type. `fell_back_to_cpu` property exposed for `main.py` to notify user via tray.
   - **Fatal runtime-error classification**: if GPU inference fails mid-recording (missing `cublas64_12.dll`, missing `cudnn64_9.dll`, driver mismatch), transcriber reports a one-shot fatal error callback so `main.py` can warn the user and avoid silent empty transcripts.
   - Worker thread consumes from the audio queue
-  - Rolling buffer: each chunk = ~1s previous audio + ~3s new audio
+  - Rolling buffer and decode settings are mode-driven:
+    - `fast`: 0.5s overlap + 1.5s new audio, beam_size=1
+    - `balanced`: 0.75s overlap + 2.0s new audio, beam_size=1
+    - `accurate`: 1.0s overlap + 3.0s new audio, beam_size=2
   - Transcribes with `word_timestamps=True` to get precise word boundaries
   - Trims output to only include words from the new audio portion (based on timestamp comparison)
   - VAD (Silero, built into faster-whisper) skips silent chunks automatically
@@ -128,7 +131,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
 - **Owns**: User preferences, defaults
 - **Inputs**: JSON config file on disk
 - **Outputs**: Config object used by all modules
-- **Settings**: output_dir, model_size, compute_device, hotkey, overlay_position, overlay_opacity, mic_device, output_device, loopback_devices, diarize_backend, hf_token, first_run_complete, consent_acknowledged, reviewer_geometry, reviewer_tutorial_show_on_open, overlay_expanded_size
+- **Settings**: output_dir, model_size, compute_device, live_caption_mode, hotkey, overlay_position, overlay_opacity, mic_device, output_device, loopback_devices, diarize_backend, hf_token, first_run_complete, consent_acknowledged, reviewer_geometry, reviewer_tutorial_show_on_open, overlay_expanded_size
 - **Defaults**: Everything works out of the box with zero config — `model_size="auto"` and `compute_device="auto"` let the transcriber pick based on detected hardware.
 
 ### `ui/tray.py` — System Tray
@@ -137,12 +140,12 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
 - **Outputs**: User action callbacks (start/stop, show/hide, quit)
 - **Key details**:
   - Uses `pystray` for native Windows system tray
-  - Menu: Start/Stop Recording, Show/Hide Captions, Review Transcripts, Set Microphone, Loopback Devices, Set Output Folder, Setup Wizard, Quit
+  - Menu: Start/Stop Recording, Show/Hide Captions, Review Transcripts, Set Microphone, Loopback Devices, Live Caption Mode, Set Output Folder, Setup Wizard, Quit
   - Shows informational status text while model loads/fails and a last-session timestamp row
   - Start Recording is disabled until model load completes (`set_model_ready(True)`)
   - Icon changes state when recording (visual indicator)
   - Runs in its own thread
-  - **Callback signatures are zero-arg intent forwards** — any handler that needs to touch tkinter (folder picker, wizard) is invoked without arguments, and the caller schedules the dialog onto the tkinter main thread via `root.after(0, ...)`. Tkinter widgets are never created from the pystray thread.
+  - **Callback signatures are intent forwards** — mode/device menu selections pass small values (e.g. selected mode/device), while tkinter-affecting handlers (folder picker, wizard) are invoked as intents and scheduled onto the tkinter main thread via `root.after(0, ...)`. Tkinter widgets are never created from the pystray thread.
 
 ### `ui/wizard.py` — First-Run Setup Wizard
 - **Owns**: Initial user onboarding + legal consent gate
