@@ -230,7 +230,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Inline speaker panel: shown between header and transcript after diarization — per-speaker rows with color dot, name entry, duration, sample text. Also accessible via "Edit Speakers" link on diarized versions.
   - Version dropdown: switch between original, batch, and diarized versions
   - Top toolbar: re-transcribe/diarize/edit controls, progress, backend + speaker-count + HF token controls, open-folder
-  - Context tutorial overlay: multi-step walkthrough shown when Review opens (default) as a dimmed, centered overlay scoped to the reviewer window, with persisted "show on open" preference and toolbar Help button to reopen on demand
+  - Context tutorial overlay: dynamic multi-step walkthrough shown when Review opens (default), implemented as a single floating tutorial card plus an in-reviewer high-contrast target border highlight (no extra transparent overlay windows), with step-aware card placement and live sync while the reviewer window moves/resizes. Persisted "show on open" preference and toolbar Help button reopen it on demand
   - Bottom status bar: session count + shortcut hints
   - Session discovery via regex matching `YYYY-MM-DD_HHMMSS` folder names
 

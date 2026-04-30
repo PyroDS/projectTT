@@ -53,6 +53,14 @@ class Config:
     first_run_complete: bool = False  # True once user finishes the first-run wizard
     consent_acknowledged: bool = False  # True once user acknowledges recording-law disclaimer
 
+    def __repr__(self) -> str:
+        """Return a log-safe representation with secrets redacted."""
+        data = asdict(self)
+        if data.get("hf_token"):
+            data["hf_token"] = "<redacted>"
+        parts = ", ".join(f"{key}={value!r}" for key, value in data.items())
+        return f"{type(self).__name__}({parts})"
+
     def get_active_loopback_devices(self) -> list[LoopbackDevice]:
         """Return the list of enabled LoopbackDevice objects.
 

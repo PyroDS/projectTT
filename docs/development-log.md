@@ -37,6 +37,91 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-29 — Floating circular Help button in reviewer (replaces toolbar Help)
+
+**What was done:**
+- Replaced the toolbar `Help` button with a floating circular button in the reviewer's bottom-right corner:
+  - `src/tachyon/ui/reviewer.py`: removed the `Help` `HoverButton` and its tooltip from `_build_toolbar()` (the `config_frame` group now contains only `Open Folder`).
+  - Added `_create_help_circle()` that builds a 40×40 `tk.Canvas` with a filled cyan oval (`Color.accent` / hover `Color.accent_hover`), a bold white "?" centered, hand cursor, and a `<Button-1>` binding routed through the existing `_on_help_click()` -> `_open_tutorial(force=True)`.
+  - Anchored via `place(relx=1.0, rely=1.0, anchor=tk.SE, x=-16, y=-43)` so the circle hovers 16px from the right edge and ~14px above the 29px status bar (28px bar + 1px divider). Stays glued to the corner across reviewer resize.
+  - Preserved tooltip text "Explain this screen" on the new circle.
+  - Wired in at end of `_create_window()` after `_update_button_state()` so widget refs already exist.
+- Tutorial behavior unchanged: same `_open_tutorial(force=True)` entry, same persisted `reviewer_tutorial_show_on_open` config preference, same in-card "Show this walkthrough when I open Review" checkbox to toggle auto-show back on.
+- Tutorial "Find the files" step still anchors to `config_frame` via the existing `help_controls` target key — that frame still contains `Open Folder` after Help removal, so the highlight remains correct.
+
+**Decisions made:**
+- Used a `tk.Canvas` rather than a square `HoverButton` to render a true circle (filled oval) instead of approximating one with padding.
+- Placed on `self._window` rather than inside the transcript text frame so the button is anchored to absolute window geometry and stays put regardless of paned-window sash drag or speaker panel show/hide.
+- Matched canvas `bg` to `Color.bg_surface` (transcript area background) so the canvas square edges blend with the area underneath the circle.
+- Kept the existing tooltip copy ("Explain this screen") for continuity with prior behavior.
+
+**Issues encountered:**
+- None.
+
+### 2026-04-29 — Stable guided tour overlay (removed transparent multi-window layering)
+
+**What was done:**
+- Reworked reviewer tutorial rendering in `src/tachyon/ui/reviewer.py` to avoid transparent multi-`Toplevel` composition:
+  - Removed transparent backdrop and transparent highlight `Toplevel` windows from the tour flow.
+  - Kept a single floating tutorial card `Toplevel`.
+  - Added an in-reviewer high-contrast target highlight built from four border edge frames (no filled overlay).
+- Preserved dynamic tour behavior:
+  - Existing target-aware step metadata and card placement logic remain.
+  - Highlight now follows the same target rectangles as steps change.
+  - Debounced `<Configure>` sync remains active for reviewer move/resize updates.
+- Reduced churn that can trigger visible flicker:
+  - Removed per-sync multi-window lift choreography for backdrop/highlight layers.
+  - Kept only card positioning + in-window border updates during sync.
+  - Help reopen still lifts the card when already open.
+- Synced docs:
+  - `docs/architecture.md`: now describes one floating card + in-window highlight (no transparent overlay windows).
+  - `docs/implementation-plan.md`: reviewer walkthrough note updated to match stable overlay implementation.
+
+**Decisions made:**
+- Used border-only in-window highlighting (4 edge frames) for clarity without obscuring underlying controls.
+- Prioritized deterministic rendering stability over translucent effects to avoid compositor flicker on Windows.
+
+**Issues encountered:**
+- None.
+
+### 2026-04-29 — Redact HuggingFace token from config logs
+
+**What was done:**
+- Added a log-safe `Config.__repr__()` in `src/tachyon/config.py`.
+- `hf_token` is now rendered as `"<redacted>"` whenever a populated `Config` object is logged, including startup's `Config loaded: ...` line.
+- Config file persistence is unchanged: the token still saves to `config.json` so pyannote can use it, but it should no longer be exposed through dataclass-style config logging.
+
+**Decisions made:**
+- Redacted at the `Config` representation layer instead of changing only the startup log call, so future `logger.info("%s", config)` style logging is protected too.
+
+**Issues encountered:**
+- Existing logs that already contain a token are not rewritten. Rotate any token that has already appeared in logs or chat.
+
+### 2026-04-29 — Dynamic guided review tour (target-following tutorial sync)
+
+**What was done:**
+- Reworked reviewer tutorial into a dynamic guided tour in `src/tachyon/ui/reviewer.py`:
+  - Tutorial steps now include target metadata and preferred placement (`left/right/above/below/center`) instead of title/body only.
+  - Added reviewer widget target mapping for sessions pane, search, versions, transcript area, toolbar actions, and help controls.
+  - Added step-aware card positioning that places the tutorial near its target and clamps inside reviewer bounds.
+  - Added lightweight target highlight overlay that moves per step.
+  - Added reviewer `<Configure>` sync binding while tutorial is open so backdrop/highlight/card all follow move/resize events.
+  - Added close cleanup for sync binding and all tutorial overlay windows.
+- Preserved existing product behavior:
+  - Help button still opens the walkthrough.
+  - Auto-show still respects `reviewer_tutorial_show_on_open`.
+  - `Back` / `Next` / `Done` / `X` / checkbox behavior unchanged.
+- Synced docs:
+  - `docs/architecture.md`: reviewer tutorial now documented as dynamic, target-following, and movement-synced.
+  - `docs/implementation-plan.md`: transcript review walkthrough note updated from centered overlay to dynamic guided tour.
+
+**Decisions made:**
+- Kept the overlay stack reviewer-scoped (`transient`) to reduce desktop-wide overlap issues with unrelated topmost windows.
+- Used a simple highlight overlay and placement heuristics instead of brittle cutout masking to keep tkinter behavior stable.
+
+**Issues encountered:**
+- None.
+
 ### 2026-04-29 — Overlay placement polish (review tutorial centering + caption bottom anchoring)
 
 **What was done:**

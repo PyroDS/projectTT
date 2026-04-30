@@ -32,6 +32,8 @@ from typing import Callable, Optional
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
+from PIL import Image, ImageDraw, ImageFont, ImageTk
+
 from tachyon.exporter import (
     discover_versions,
     load_transcript_from_markdown,
@@ -48,49 +50,71 @@ logger = logging.getLogger(__name__)
 # Regex for session folder names
 _SESSION_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$")
 
-_REVIEWER_TUTORIAL_STEPS: list[tuple[str, str]] = [
+_REVIEWER_TUTORIAL_STEPS: list[tuple[str, str, str, str]] = [
     (
         "Review your transcripts",
         "This screen helps you find recordings, read transcripts, clean them up, "
         "name who was speaking, and open the saved files.",
+        "window",
+        "center",
     ),
     (
         "Your recordings",
         "Pick a past recording from the left. Newest recordings are shown first, with quick "
         "hints like length and whether extra versions are available.",
+        "sessions",
+        "right",
     ),
     (
         "Search",
         "Type in Search to quickly narrow recordings by date or label.",
+        "search",
+        "right",
     ),
     (
         "Transcript view",
         "The right side shows timestamped transcript lines so you can quickly review what was said.",
+        "transcript",
+        "left",
     ),
     (
         "Transcript versions",
         "Use this dropdown to compare the original transcript with cleaned-up, speaker-labeled, "
         "or edited versions.",
+        "versions",
+        "below",
     ),
     (
         "Clean up a transcript",
         "Use Re-transcribe when the first pass missed words. Tachyon listens again to the saved "
         "recording and creates a new improved version.",
+        "actions",
+        "below",
     ),
     (
         "Name who was speaking",
         "Use Identify Speakers when several people are talking. Tachyon can separate voices so "
         "you can rename Speaker 1, Speaker 2, and so on.",
+        "actions",
+        "below",
     ),
     (
         "Edit and save",
         "Use Edit for quick fixes. Saving creates a new version so your earlier transcript stays safe.",
+        "actions",
+        "below",
     ),
     (
         "Find the files",
         "Open Folder shows the saved transcript and recording files for the selected session.",
+        "help_controls",
+        "left",
     ),
 ]
+
+_TOUR_CARD_W = 680
+_TOUR_CARD_H = 420
+_TOUR_PADDING = 14
 _BACKEND_OPTIONS = ("speechbrain", "pyannote", "resemblyzer")
 
 
@@ -291,10 +315,22 @@ class TranscriptReviewer:
         self._visible: bool = False
         self._initial_geometry: Optional[str] = None
         self._tutorial_show_on_open: bool = tutorial_show_on_open
-        self._tutorial_backdrop: Optional[tk.Toplevel] = None
         self._tutorial_window: Optional[tk.Toplevel] = None
         self._tutorial_step_idx: int = 0
         self._tutorial_show_var = tk.BooleanVar(value=tutorial_show_on_open)
+        self._tutorial_window_configure_bind_id: Optional[str] = None
+        self._tutorial_sync_after_id: Optional[str] = None
+        self._tutorial_highlight_edges: list[tk.Frame] = []
+
+        # Reviewer widgets used by guided tour anchoring
+        self._tutorial_target_widgets: dict[str, tk.Widget] = {}
+        self._toolbar_action_frame: Optional[tk.Frame] = None
+        self._toolbar_config_frame: Optional[tk.Frame] = None
+        self._left_panel_frame: Optional[tk.Frame] = None
+        self._search_frame: Optional[tk.Frame] = None
+        self._header_frame: Optional[tk.Frame] = None
+        self._version_frame: Optional[tk.Frame] = None
+        self._transcript_frame: Optional[tk.Frame] = None
 
     # ------------------------------------------------------------------
     # Show / Hide
@@ -510,6 +546,7 @@ class TranscriptReviewer:
 
         # -- Left panel: session list ----------------------------------------
         left_frame = tk.Frame(main_pane, bg=Color.bg_secondary)
+        self._left_panel_frame = left_frame
 
         # Header with accent underline
         header_container = tk.Frame(left_frame, bg=Color.bg_elevated)
@@ -530,6 +567,7 @@ class TranscriptReviewer:
             highlightbackground=Color.border_subtle,
             highlightcolor=Color.accent,
         )
+        self._search_frame = search_frame
         search_frame.pack(fill=tk.X, padx=10, pady=(10, 6))
 
         self._search_var = tk.StringVar()
@@ -597,6 +635,7 @@ class TranscriptReviewer:
 
         # Header area
         header_frame = tk.Frame(right_frame, bg=Color.bg_elevated)
+        self._header_frame = header_frame
         header_frame.pack(fill=tk.X)
 
         # Two-line title area
@@ -621,6 +660,7 @@ class TranscriptReviewer:
 
         # Version selector area (right side of header)
         version_frame = tk.Frame(header_frame, bg=Color.bg_elevated)
+        self._version_frame = version_frame
         version_frame.pack(side=tk.RIGHT, padx=16, pady=8)
 
         # "Edit Speakers" button (hidden by default, shown for diarized versions)
@@ -697,6 +737,7 @@ class TranscriptReviewer:
 
         # Transcript text widget
         text_frame = tk.Frame(right_frame, bg=Color.bg_surface)
+        self._transcript_frame = text_frame
         text_frame.pack(fill=tk.BOTH, expand=True)
 
         self._text_widget = tk.Text(
@@ -751,7 +792,16 @@ class TranscriptReviewer:
         self._window.bind("<Control-r>", lambda e: self._on_retranscribe_click())
         self._window.bind("<Escape>", self._on_escape)
 
+        self._tutorial_target_widgets.update({
+            "window": self._window,
+            "sessions": self._left_panel_frame,
+            "search": self._search_frame,
+            "header": self._header_frame,
+            "versions": self._version_frame,
+            "transcript": self._transcript_frame,
+        })
         self._update_button_state()
+        self._create_help_circle()
 
     def _build_toolbar(self) -> None:
         """Build the top toolbar with grouped controls."""
@@ -768,6 +818,7 @@ class TranscriptReviewer:
 
         # == Left group: Action buttons ==
         action_frame = tk.Frame(toolbar, bg=Color.bg_elevated)
+        self._toolbar_action_frame = action_frame
         action_frame.pack(side=tk.LEFT, padx=(12, 0))
 
         self._retranscribe_btn = tk.Button(
@@ -881,6 +932,7 @@ class TranscriptReviewer:
 
         # == Right group: Config controls ==
         config_frame = tk.Frame(toolbar, bg=Color.bg_elevated)
+        self._toolbar_config_frame = config_frame
         config_frame.pack(side=tk.RIGHT, padx=(0, 12))
 
         self._backend_var = tk.StringVar(
@@ -952,19 +1004,8 @@ class TranscriptReviewer:
         )
         open_folder_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=9)
 
-        help_btn = HoverButton(
-            config_frame,
-            text="Help",
-            icon="?",
-            fg=Color.fg_primary,
-            bg=Color.btn_neutral,
-            hover_bg=Color.btn_neutral_hover,
-            font=(Font.family, Font.size_tiny),
-            padx=10,
-            pady=4,
-            command=self._on_help_click,
-        )
-        help_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=9)
+        self._tutorial_target_widgets["actions"] = action_frame
+        self._tutorial_target_widgets["help_controls"] = config_frame
 
         # -- Tooltips --
         ToolTip(self._retranscribe_btn, "Re-transcribe with higher quality settings (Ctrl+R)")
@@ -973,7 +1014,6 @@ class TranscriptReviewer:
         ToolTip(self._backend_dropdown, "Select diarization engine")
         ToolTip(self._speaker_count_dropdown, "Expected number of speakers (Auto = let the engine decide)")
         ToolTip(open_folder_btn, "Open the session folder in Explorer")
-        ToolTip(help_btn, "Explain this screen")
 
         # 1px divider below toolbar
         tk.Frame(self._window, bg=Color.border, height=1).pack(fill=tk.X)
@@ -1000,6 +1040,8 @@ class TranscriptReviewer:
 
     def _filter_sessions(self) -> None:
         """Filter sessions based on search text."""
+        if not hasattr(self, "_session_list_frame"):
+            return
         query = self._search_var.get().strip().lower()
         if not query or query == "search sessions...":
             self._filtered_sessions = list(self._sessions)
@@ -2182,8 +2224,76 @@ class TranscriptReviewer:
         else:
             os.startfile(self._output_dir)
 
+    def _create_help_circle(self) -> None:
+        """Create a floating circular Help button in the bottom-right corner."""
+        size = 36
+        self._help_circle_img_normal = self._render_help_circle_image(
+            size, Color.accent, Color.accent_hover
+        )
+        self._help_circle_img_hover = self._render_help_circle_image(
+            size, Color.accent_hover, Color.fg_bright
+        )
+        self._help_circle = tk.Label(
+            self._window,
+            image=self._help_circle_img_normal,
+            bg=Color.bg_surface,
+            borderwidth=0,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self._help_circle.bind("<Enter>", self._on_help_circle_enter)
+        self._help_circle.bind("<Leave>", self._on_help_circle_leave)
+        self._help_circle.bind("<Button-1>", lambda _e: self._on_help_click())
+        # x=-34 clears a typical ~20px vertical scrollbar with breathing room.
+        # y=-43 = status bar (28) + divider (1) + 14px breathing room.
+        self._help_circle.place(
+            relx=1.0, rely=1.0, anchor=tk.SE,
+            x=-34, y=-43,
+        )
+        tk.Misc.lift(self._help_circle)
+        ToolTip(self._help_circle, "Explain this screen")
+
+    @staticmethod
+    def _render_help_circle_image(
+        size: int, fill_hex: str, outline_hex: str
+    ) -> ImageTk.PhotoImage:
+        """Render an anti-aliased '?' circle as a PhotoImage."""
+        scale = 4
+        big = size * scale
+        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        pad = 2 * scale
+        draw.ellipse(
+            [pad, pad, big - pad, big - pad],
+            fill=fill_hex,
+            outline=outline_hex,
+            width=scale,
+        )
+        font_px = int(big * 0.55)
+        try:
+            font = ImageFont.truetype("segoeuib.ttf", font_px)
+        except OSError:
+            try:
+                font = ImageFont.truetype("arialbd.ttf", font_px)
+            except OSError:
+                font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), "?", font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        text_x = (big - text_w) / 2 - bbox[0]
+        text_y = (big - text_h) / 2 - bbox[1]
+        draw.text((text_x, text_y), "?", fill=Color.fg_bright, font=font)
+        img = img.resize((size, size), Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+
+    def _on_help_circle_enter(self, _event: tk.Event) -> None:
+        self._help_circle.configure(image=self._help_circle_img_hover)
+
+    def _on_help_circle_leave(self, _event: tk.Event) -> None:
+        self._help_circle.configure(image=self._help_circle_img_normal)
+
     def _on_help_click(self) -> None:
-        """Open the reviewer tutorial from the toolbar."""
+        """Open the reviewer tutorial from the floating help button."""
         self._open_tutorial(force=True)
 
     # ------------------------------------------------------------------
@@ -2197,48 +2307,23 @@ class TranscriptReviewer:
         if not force and not self._tutorial_show_on_open:
             return
         if self._tutorial_window is not None and self._tutorial_window.winfo_exists():
+            self._position_tutorial_overlays()
             self._tutorial_window.lift()
             return
 
         self._tutorial_step_idx = 0
-        self._window.update_idletasks()
-        review_x = self._window.winfo_rootx()
-        review_y = self._window.winfo_rooty()
-        review_w = self._window.winfo_width()
-        review_h = self._window.winfo_height()
-
-        backdrop = tk.Toplevel(self._window)
-        self._tutorial_backdrop = backdrop
-        backdrop.overrideredirect(True)
-        backdrop.transient(self._window)
-        backdrop.configure(bg=Color.bg_primary)
-        backdrop.geometry(f"{review_w}x{review_h}+{review_x}+{review_y}")
-        try:
-            backdrop.attributes("-alpha", 0.45)
-        except tk.TclError:
-            pass
-        backdrop.bind("<Button-1>", lambda _e: self._close_tutorial())
+        self._ensure_tutorial_highlight_edges()
 
         win = tk.Toplevel(self._window)
         self._tutorial_window = win
+        win.withdraw()
         win.title("Reviewer Tutorial")
         win.configure(bg=Color.bg_primary)
         win.transient(self._window)
         win.overrideredirect(True)
         win.resizable(False, False)
-        card_w = 680
-        card_h = 420
-        card_x = review_x + max(0, (review_w - card_w) // 2)
-        card_y = review_y + max(0, (review_h - card_h) // 2)
-        win.geometry(f"{card_w}x{card_h}+{card_x}+{card_y}")
         win.protocol("WM_DELETE_WINDOW", self._close_tutorial)
         win.bind("<Escape>", lambda _e: self._close_tutorial())
-
-        # Keep the walkthrough focused while still allowing easy dismissal.
-        try:
-            win.grab_set()
-        except tk.TclError:
-            pass
 
         container = tk.Frame(
             win,
@@ -2369,9 +2454,10 @@ class TranscriptReviewer:
         )
         self._tutorial_done_btn.pack(side=tk.RIGHT)
 
+        self._bind_tutorial_sync()
         self._render_tutorial_step()
-        backdrop.lift(self._window)
-        win.lift(backdrop)
+        self._position_tutorial_overlays()
+        self._tutorial_window.lift(self._window)
 
     def _render_tutorial_step(self) -> None:
         """Render the current tutorial step."""
@@ -2379,7 +2465,7 @@ class TranscriptReviewer:
             return
         total = len(_REVIEWER_TUTORIAL_STEPS)
         self._tutorial_step_idx = max(0, min(self._tutorial_step_idx, total - 1))
-        title, body = _REVIEWER_TUTORIAL_STEPS[self._tutorial_step_idx]
+        title, body, _target_key, _placement = _REVIEWER_TUTORIAL_STEPS[self._tutorial_step_idx]
 
         self._tutorial_counter_label.configure(
             text=f"Step {self._tutorial_step_idx + 1} of {total}"
@@ -2397,6 +2483,7 @@ class TranscriptReviewer:
             bg=Color.accent if is_last else Color.success,
             activebackground=Color.accent_hover if is_last else Color.success_hover,
         )
+        self._position_tutorial_overlays()
 
     def _on_tutorial_back(self) -> None:
         self._tutorial_step_idx -= 1
@@ -2417,19 +2504,191 @@ class TranscriptReviewer:
         if self._on_tutorial_preference_changed:
             self._on_tutorial_preference_changed(show_on_open)
 
+    def _ensure_tutorial_highlight_edges(self) -> None:
+        """Create reusable high-contrast border segments for target focus."""
+        if self._window is None:
+            return
+        if self._tutorial_highlight_edges:
+            return
+        for _ in range(4):
+            edge = tk.Frame(self._window, bg=Color.accent_hover)
+            edge.place_forget()
+            self._tutorial_highlight_edges.append(edge)
+
+    def _hide_tutorial_highlight(self) -> None:
+        """Hide all highlight border segments."""
+        for edge in self._tutorial_highlight_edges:
+            edge.place_forget()
+
+    def _place_tutorial_highlight(
+        self, reviewer_rect: tuple[int, int, int, int], target_rect: tuple[int, int, int, int]
+    ) -> None:
+        """Place highlight borders around the target in reviewer-local coords."""
+        if not self._tutorial_highlight_edges:
+            return
+        rx, ry, _rw, _rh = reviewer_rect
+        tx, ty, tw, th = target_rect
+        pad = 6
+        border = 3
+        lx = tx - rx - pad
+        ly = ty - ry - pad
+        lw = tw + (pad * 2)
+        lh = th + (pad * 2)
+        # Top, right, bottom, left
+        self._tutorial_highlight_edges[0].place(x=lx, y=ly, width=lw, height=border)
+        self._tutorial_highlight_edges[1].place(x=lx + lw - border, y=ly, width=border, height=lh)
+        self._tutorial_highlight_edges[2].place(x=lx, y=ly + lh - border, width=lw, height=border)
+        self._tutorial_highlight_edges[3].place(x=lx, y=ly, width=border, height=lh)
+        for edge in self._tutorial_highlight_edges:
+            edge.lift()
+
+    def _bind_tutorial_sync(self) -> None:
+        """Attach reviewer movement/resize sync while tutorial is open."""
+        if self._window is None:
+            return
+        self._unbind_tutorial_sync()
+        self._tutorial_window_configure_bind_id = self._window.bind(
+            "<Configure>", self._on_tutorial_host_configure, add="+"
+        )
+
+    def _unbind_tutorial_sync(self) -> None:
+        """Detach reviewer movement/resize sync callback."""
+        if (
+            self._window is None
+            or not self._window.winfo_exists()
+            or self._tutorial_window_configure_bind_id is None
+        ):
+            return
+        self._window.unbind("<Configure>", self._tutorial_window_configure_bind_id)
+        self._tutorial_window_configure_bind_id = None
+
+    def _on_tutorial_host_configure(self, _event: tk.Event) -> None:
+        """Keep tutorial overlays synchronized with reviewer movement/size."""
+        if self._window is None or not self._window.winfo_exists():
+            return
+        if self._tutorial_sync_after_id is not None:
+            try:
+                self._window.after_cancel(self._tutorial_sync_after_id)
+            except tk.TclError:
+                pass
+        self._tutorial_sync_after_id = self._window.after(
+            30, self._run_tutorial_sync
+        )
+
+    def _run_tutorial_sync(self) -> None:
+        """Run a debounced tutorial sync after reviewer geometry settles."""
+        self._tutorial_sync_after_id = None
+        self._position_tutorial_overlays()
+
+    def _get_widget_rect(self, widget: Optional[tk.Widget]) -> Optional[tuple[int, int, int, int]]:
+        """Return (x, y, w, h) in screen coords for a widget."""
+        if widget is None:
+            return None
+        if not widget.winfo_exists():
+            return None
+        try:
+            widget.update_idletasks()
+            return (
+                widget.winfo_rootx(),
+                widget.winfo_rooty(),
+                max(1, widget.winfo_width()),
+                max(1, widget.winfo_height()),
+            )
+        except tk.TclError:
+            return None
+
+    def _get_reviewer_rect(self) -> Optional[tuple[int, int, int, int]]:
+        """Return reviewer window bounds in screen coords."""
+        return self._get_widget_rect(self._window)
+
+    def _get_tutorial_target_rect(self, target_key: str) -> Optional[tuple[int, int, int, int]]:
+        """Get a target rectangle by key for the current tutorial step."""
+        if target_key == "window":
+            return self._get_reviewer_rect()
+        widget = self._tutorial_target_widgets.get(target_key)
+        return self._get_widget_rect(widget)
+
+    @staticmethod
+    def _clamp(value: int, lower: int, upper: int) -> int:
+        return max(lower, min(value, upper))
+
+    def _compute_tutorial_card_position(
+        self,
+        reviewer_rect: tuple[int, int, int, int],
+        target_rect: Optional[tuple[int, int, int, int]],
+        placement: str,
+    ) -> tuple[int, int]:
+        """Compute card top-left position near target while staying in bounds."""
+        rx, ry, rw, rh = reviewer_rect
+        card_w = _TOUR_CARD_W
+        card_h = _TOUR_CARD_H
+        if target_rect is None or placement == "center":
+            cx = rx + (rw - card_w) // 2
+            cy = ry + (rh - card_h) // 2
+        else:
+            tx, ty, tw, th = target_rect
+            if placement == "right":
+                cx = tx + tw + _TOUR_PADDING
+                cy = ty + (th - card_h) // 2
+            elif placement == "left":
+                cx = tx - card_w - _TOUR_PADDING
+                cy = ty + (th - card_h) // 2
+            elif placement == "above":
+                cx = tx + (tw - card_w) // 2
+                cy = ty - card_h - _TOUR_PADDING
+            else:  # below
+                cx = tx + (tw - card_w) // 2
+                cy = ty + th + _TOUR_PADDING
+
+        min_x = rx + _TOUR_PADDING
+        min_y = ry + _TOUR_PADDING
+        max_x = rx + rw - card_w - _TOUR_PADDING
+        max_y = ry + rh - card_h - _TOUR_PADDING
+        cx = self._clamp(cx, min_x, max_x)
+        cy = self._clamp(cy, min_y, max_y)
+        return cx, cy
+
+    def _position_tutorial_overlays(self) -> None:
+        """Reposition tutorial card and in-window target highlight."""
+        if self._tutorial_window is None or not self._tutorial_window.winfo_exists():
+            return
+        reviewer_rect = self._get_reviewer_rect()
+        if reviewer_rect is None:
+            return
+
+        _title, _body, target_key, placement = _REVIEWER_TUTORIAL_STEPS[self._tutorial_step_idx]
+        target_rect = self._get_tutorial_target_rect(target_key)
+        if target_rect is None or target_key == "window":
+            self._hide_tutorial_highlight()
+        else:
+            self._place_tutorial_highlight(reviewer_rect, target_rect)
+
+        card_x, card_y = self._compute_tutorial_card_position(
+            reviewer_rect, target_rect, placement
+        )
+        card_geo = f"{_TOUR_CARD_W}x{_TOUR_CARD_H}+{card_x}+{card_y}"
+        if self._tutorial_window.geometry() != card_geo:
+            self._tutorial_window.geometry(card_geo)
+        self._tutorial_window.deiconify()
+
     def _close_tutorial(self) -> None:
         """Close tutorial overlay if open."""
-        if self._tutorial_backdrop is not None and self._tutorial_backdrop.winfo_exists():
-            self._tutorial_backdrop.destroy()
-        self._tutorial_backdrop = None
+        if self._tutorial_sync_after_id is not None and self._window is not None:
+            try:
+                self._window.after_cancel(self._tutorial_sync_after_id)
+            except tk.TclError:
+                pass
+            self._tutorial_sync_after_id = None
+        self._unbind_tutorial_sync()
+        self._hide_tutorial_highlight()
+        for edge in self._tutorial_highlight_edges:
+            if edge.winfo_exists():
+                edge.destroy()
+        self._tutorial_highlight_edges = []
 
         if self._tutorial_window is None:
             return
         if self._tutorial_window.winfo_exists():
-            try:
-                self._tutorial_window.grab_release()
-            except tk.TclError:
-                pass
             self._tutorial_window.destroy()
         self._tutorial_window = None
 
