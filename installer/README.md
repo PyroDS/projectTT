@@ -55,7 +55,7 @@ Total build time on a warm machine: 3–8 minutes.
 
 - **Per-user install**: `%LocalAppData%\Programs\Tachyon Transcripts\`. No admin elevation required, which matters because the installer is unsigned — forcing UAC would trigger a second SmartScreen warning.
 - **Shortcuts**: Start Menu entry by default; desktop shortcut optional; autostart-on-login optional (unchecked by default).
-- **Uninstall**: Standard "Add or Remove Programs" entry. Removes the install tree and cached model weights under `{app}\models\`, but deliberately **does not** touch user recordings (default output is `output/` next to the app unless changed in settings).
+- **Uninstall**: Standard "Add or Remove Programs" entry. First stops the running tray app, then removes program/runtime artifacts (`_internal`, binaries, docs/assets, `models`, `config.json`, `tachyon.log`) and app shortcuts. Recordings/transcripts in `{app}\output\` are deliberately preserved; if that preserved folder remains, the install root may remain with only `output/`.
 
 ## Known rough edges (v1)
 
@@ -76,5 +76,5 @@ Before announcing a release, smoke-test on a clean Windows VM:
 - [ ] Consent checkbox is required to proceed past the legal page.
 - [ ] After finishing the wizard, the tray icon appears.
 - [ ] Right-click → Start Recording produces a `mic.wav` and (if applicable) `system.wav` in the output folder.
-- [ ] Uninstall via Settings → Apps removes the install tree but leaves recordings in the configured output folder (default: app-local `output/`).
+- [ ] Uninstall via Settings → Apps removes program/runtime artifacts and shortcuts, while preserving recordings in the configured output folder (default: app-local `output/`).
 - [ ] Re-install over an existing install works without errors.

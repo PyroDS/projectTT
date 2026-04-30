@@ -748,6 +748,8 @@ class App:
                 on_save_speaker_names=self._on_save_speaker_names,
                 on_hf_token_changed=self._on_hf_token_changed,
                 on_save_geometry=self._on_save_reviewer_geometry,
+                tutorial_show_on_open=self._config.reviewer_tutorial_show_on_open,
+                on_tutorial_preference_changed=self._on_save_reviewer_tutorial_preference,
             )
             self._reviewer.set_backend_config(
                 self._config.diarize_backend, self._config.hf_token,
@@ -1043,6 +1045,12 @@ class App:
         self._config.reviewer_geometry = geometry
         self._config.save()
         logger.debug("Reviewer geometry saved: %s", geometry)
+
+    def _on_save_reviewer_tutorial_preference(self, show_on_open: bool) -> None:
+        """Persist reviewer tutorial auto-show preference to config."""
+        self._config.reviewer_tutorial_show_on_open = show_on_open
+        self._config.save()
+        logger.debug("Reviewer tutorial auto-show saved: %s", show_on_open)
 
     def _on_save_speaker_names(
         self, session_dir: Path, names: dict[str, str],

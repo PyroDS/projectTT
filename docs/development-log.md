@@ -37,6 +37,99 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-29 — Overlay placement polish (review tutorial centering + caption bottom anchoring)
+
+**What was done:**
+- Reviewer tutorial overlay placement and layering:
+  - `src/tachyon/ui/reviewer.py`: changed tutorial rendering from a fixed-geometry popup to a reviewer-scoped overlay model.
+  - Added a dim backdrop `Toplevel` sized to reviewer bounds.
+  - Added a centered tutorial card `Toplevel` on top of the backdrop, positioned from reviewer `rootx/rooty/width/height`.
+  - Preserved existing controls and behavior (`X`, `Back`, `Next`, `Done`, persisted checkbox, Help button trigger).
+  - Close path now destroys both overlay windows (backdrop + card) to avoid orphaned UI artifacts.
+- Closed-caption default placement anchoring:
+  - `src/tachyon/ui/overlay.py`: added `_default_position_active` to distinguish initial default placement from user-dragged runtime placement.
+  - `_recalc_collapsed_height()` now re-anchors to bottom-center when using default placement so final position is based on actual collapsed height.
+  - Dragging the overlay disables default re-anchoring for that runtime session.
+  - Explicit/saved positions (`overlay_position`) remain fully respected.
+- Synced docs:
+  - `docs/architecture.md`: clarified reviewer tutorial as dimmed centered overlay and caption bottom anchoring after collapsed-height calculation.
+  - `docs/implementation-plan.md`: mirrored reviewer overlay and caption anchoring behavior notes.
+
+**Decisions made:**
+- Kept tutorial overlay scoped to the reviewer window rather than the full desktop to reduce interaction conflicts with unrelated always-on-top windows.
+- Did not auto-hide or force-move the caption overlay when tutorial opens; focused this pass on deterministic reviewer overlay placement and caption default anchoring.
+
+**Issues encountered:**
+- None.
+
+### 2026-04-29 — Installer uninstall cleanup (artifact removal + output preservation)
+
+**What was done:**
+- Tightened uninstall behavior in `installer/Tachyon.iss`:
+  - Added an `[UninstallRun]` `taskkill` step to stop `TachyonTranscripts.exe` before deletion, preventing locked `_internal` files and open log handles from surviving uninstall.
+  - Expanded `[UninstallDelete]` cleanup to explicitly remove runtime artifacts commonly left behind in smoke tests: `{app}\_internal`, `{app}\assets`, `{app}\docs`, `{app}\models`, `{app}\config.json`, `{app}\tachyon.log`, desktop/startup shortcuts, and the app Start Menu group.
+  - Added `Type: dirifempty; Name: "{app}"` so the install root is removed when nothing preserved remains.
+  - Preserved `{app}\output\` recordings/transcripts by design.
+- Synced uninstall behavior docs:
+  - `installer/README.md` now states uninstall removes program/runtime artifacts and shortcuts, while preserving recordings.
+  - `README.md` install section now clarifies uninstall scope as app/runtime files + shortcuts removed, recordings preserved.
+  - `docs/architecture.md` Distribution & Packaging section now reflects the process-terminate + artifact-cleanup behavior instead of the older blanket "remove install tree" phrasing.
+
+**Decisions made:**
+- Chose data safety over full-folder wipe: preserve user content in app-local `output/` even when it means `{app}` may remain if that folder contains recordings.
+- Kept explicit artifact delete entries in Inno script for robustness against stale files not tracked in the install manifest.
+
+**Issues encountered:**
+- None.
+
+### 2026-04-29 — Reviewer tutorial copy polish for non-technical users
+
+**What was done:**
+- Updated tutorial copy in `src/tachyon/ui/reviewer.py` to remove engineering jargon and focus on clear user outcomes.
+- Added a new opening walkthrough step (`Review your transcripts`) so first-run users get context before control-by-control guidance.
+- Reworded step titles/bodies to plain language:
+  - "Sessions list" -> "Your recordings"
+  - "Version selector" -> "Transcript versions"
+  - "Re-transcribe" guidance framed as "Clean up a transcript"
+  - "Identify Speakers" guidance framed as naming speakers
+  - "Open Folder" guidance framed as finding saved files
+- Polished tutorial control text:
+  - Checkbox: `Show this walkthrough when I open Review`
+  - Help tooltip: `Explain this screen`
+
+**Decisions made:**
+- Kept behavior unchanged (same persistence key, same auto-show trigger, same modal tutorial structure) and limited this pass to wording/UX clarity.
+- Kept button labels (`Back`, `Next`, `Done`, `X`) unchanged for consistency with existing navigation expectations.
+
+**Issues encountered:**
+- None.
+
+### 2026-04-29 — Reviewer tutorial overlay (guided walkthrough + persisted preference)
+
+**What was done:**
+- Added reviewer tutorial preference persistence:
+  - `src/tachyon/config.py`: new config field `reviewer_tutorial_show_on_open` (default `True`).
+- Implemented an in-window tutorial flow for transcript review:
+  - `src/tachyon/ui/reviewer.py`: `TranscriptReviewer` now accepts `tutorial_show_on_open` + `on_tutorial_preference_changed` wiring from `main.py`.
+  - Added a modal-ish tutorial `tk.Toplevel` with step content covering sessions, search, transcript pane, versioning, re-transcribe, speaker ID, editing, and output files.
+  - Added tutorial controls: `X`, `Back`, `Next`, `Done`, plus a toggle checkbox (`Show this tutorial when Review opens`).
+  - Added a `Help` toolbar button to reopen the tutorial at any time, even when auto-show is disabled.
+  - Reviewer now auto-opens the tutorial when the Review window is shown from a hidden state and the preference is enabled.
+  - Reviewer hide/close path now closes the tutorial overlay cleanly to avoid orphaned modal windows.
+- Wired persistence callback in app controller:
+  - `src/tachyon/main.py`: passes config preference into `TranscriptReviewer` and persists changes via new `_on_save_reviewer_tutorial_preference(...)`.
+- Synced architectural/spec docs:
+  - `docs/implementation-plan.md`: added `reviewer_tutorial_show_on_open` to settings and reviewer capability note.
+  - `docs/architecture.md`: added `reviewer_tutorial_show_on_open` to settings and documented reviewer tutorial ownership/behavior.
+
+**Decisions made:**
+- Kept tutorial implementation inside `ui/reviewer.py` (no new module) to keep reviewer-specific UX logic co-located and lightweight.
+- Used a modal-ish `Toplevel` (`transient` + `grab_set`) for focus, while still providing immediate dismissal via both titlebar close and explicit `X`.
+- Auto-show triggers only when Review transitions from hidden to shown, preventing repeated popups during simple `lift()` calls.
+
+**Issues encountered:**
+- None.
+
 ### 2026-04-29 — Review findings remediation (timestamp alignment + startup/docs sync)
 
 **What was done:**

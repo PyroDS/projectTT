@@ -33,7 +33,7 @@ Download `TachyonTranscripts-Setup-<version>.exe` from the [Releases page](https
 
 **Heads-up**: the installer is not code-signed, so Windows SmartScreen will show a "Windows protected your PC" warning on first run. Click **More info** → **Run anyway**. This is a known rough edge that costs real money to fix (EV code-signing certificate + a few months of reputation building) and is on the v1.1 roadmap.
 
-Install location is per-user: `%LocalAppData%\Programs\Tachyon Transcripts`. No admin elevation required. Uninstall via Settings → Apps → Tachyon Transcripts; your recordings under `output/` are preserved.
+Install location is per-user: `%LocalAppData%\Programs\Tachyon Transcripts`. No admin elevation required. Uninstall via Settings → Apps → Tachyon Transcripts removes app/runtime files and shortcuts; recordings under `output/` are preserved.
 
 ### B. From source (for developers)
 

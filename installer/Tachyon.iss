@@ -99,13 +99,26 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "--download-model"; \
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; \
     Flags: postinstall skipifsilent nowait unchecked
 
+[UninstallRun]
+; Ensure the tray app is not still running so DLLs/log files under
+; the one-folder bundle are not left behind due to file locks.
+Filename: "{cmd}"; Parameters: "/C taskkill /IM ""{#MyAppExeName}"" /T /F >nul 2>&1"; \
+    Flags: runhidden waituntilterminated; RunOnceId: "KillTachyonProcess"
+
 [UninstallDelete]
 ; Purge per-user config + caches created under the install tree.
-; User recordings live under Documents by default and are intentionally
-; NOT removed — the uninstaller must never delete the user's work.
+; User recordings in {app}\output are intentionally NOT removed.
+; This may leave {app} behind if output data exists.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\assets"
+Type: filesandordirs; Name: "{app}\docs"
 Type: filesandordirs; Name: "{app}\models"
 Type: files;          Name: "{app}\config.json"
 Type: files;          Name: "{app}\tachyon.log"
+Type: files;          Name: "{userdesktop}\{#MyAppName}.lnk"
+Type: files;          Name: "{userstartup}\{#MyAppName}.lnk"
+Type: filesandordirs; Name: "{group}"
+Type: dirifempty;     Name: "{app}"
 
 [Messages]
 SetupAppTitle={#MyAppName} Setup

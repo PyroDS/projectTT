@@ -48,6 +48,7 @@ class Config:
     diarize_backend: str = "speechbrain"  # "speechbrain", "pyannote", or "resemblyzer"
     hf_token: str = ""  # HuggingFace token for pyannote backend
     reviewer_geometry: Optional[str] = None  # "WxH+X+Y" format, None = default
+    reviewer_tutorial_show_on_open: bool = True  # Show reviewer tutorial overlay on open
     overlay_expanded_size: Optional[tuple[int, int]] = None  # (W, H) for expanded overlay
     first_run_complete: bool = False  # True once user finishes the first-run wizard
     consent_acknowledged: bool = False  # True once user acknowledges recording-law disclaimer

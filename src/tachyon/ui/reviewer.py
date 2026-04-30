@@ -47,6 +47,50 @@ logger = logging.getLogger(__name__)
 
 # Regex for session folder names
 _SESSION_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$")
+
+_REVIEWER_TUTORIAL_STEPS: list[tuple[str, str]] = [
+    (
+        "Review your transcripts",
+        "This screen helps you find recordings, read transcripts, clean them up, "
+        "name who was speaking, and open the saved files.",
+    ),
+    (
+        "Your recordings",
+        "Pick a past recording from the left. Newest recordings are shown first, with quick "
+        "hints like length and whether extra versions are available.",
+    ),
+    (
+        "Search",
+        "Type in Search to quickly narrow recordings by date or label.",
+    ),
+    (
+        "Transcript view",
+        "The right side shows timestamped transcript lines so you can quickly review what was said.",
+    ),
+    (
+        "Transcript versions",
+        "Use this dropdown to compare the original transcript with cleaned-up, speaker-labeled, "
+        "or edited versions.",
+    ),
+    (
+        "Clean up a transcript",
+        "Use Re-transcribe when the first pass missed words. Tachyon listens again to the saved "
+        "recording and creates a new improved version.",
+    ),
+    (
+        "Name who was speaking",
+        "Use Identify Speakers when several people are talking. Tachyon can separate voices so "
+        "you can rename Speaker 1, Speaker 2, and so on.",
+    ),
+    (
+        "Edit and save",
+        "Use Edit for quick fixes. Saving creates a new version so your earlier transcript stays safe.",
+    ),
+    (
+        "Find the files",
+        "Open Folder shows the saved transcript and recording files for the selected session.",
+    ),
+]
 _BACKEND_OPTIONS = ("speechbrain", "pyannote", "resemblyzer")
 
 
@@ -206,6 +250,8 @@ class TranscriptReviewer:
         on_save_speaker_names: Optional[Callable[[Path, dict[str, str]], None]] = None,
         on_hf_token_changed: Optional[Callable[[str], None]] = None,
         on_save_geometry: Optional[Callable[[str], None]] = None,
+        tutorial_show_on_open: bool = True,
+        on_tutorial_preference_changed: Optional[Callable[[bool], None]] = None,
     ) -> None:
         self._root = root
         self._output_dir = output_dir
@@ -216,6 +262,7 @@ class TranscriptReviewer:
         self._on_save_speaker_names = on_save_speaker_names
         self._on_hf_token_changed = on_hf_token_changed
         self._on_save_geometry = on_save_geometry
+        self._on_tutorial_preference_changed = on_tutorial_preference_changed
 
         self._sessions: list[SessionInfo] = []
         self._filtered_sessions: list[SessionInfo] = []
@@ -243,6 +290,11 @@ class TranscriptReviewer:
         self._window: Optional[tk.Toplevel] = None
         self._visible: bool = False
         self._initial_geometry: Optional[str] = None
+        self._tutorial_show_on_open: bool = tutorial_show_on_open
+        self._tutorial_backdrop: Optional[tk.Toplevel] = None
+        self._tutorial_window: Optional[tk.Toplevel] = None
+        self._tutorial_step_idx: int = 0
+        self._tutorial_show_var = tk.BooleanVar(value=tutorial_show_on_open)
 
     # ------------------------------------------------------------------
     # Show / Hide
@@ -250,15 +302,19 @@ class TranscriptReviewer:
 
     def show(self) -> None:
         """Show the reviewer window, creating it if needed."""
+        was_hidden = not self._visible
         if self._window is None or not self._window.winfo_exists():
             self._create_window()
             self._refresh_sessions()
         self._window.deiconify()
         self._window.lift()
         self._visible = True
+        if was_hidden and self._tutorial_show_on_open:
+            self._window.after(150, lambda: self._open_tutorial(force=True))
 
     def hide(self) -> None:
         """Hide the reviewer window (does not destroy it)."""
+        self._close_tutorial()
         if self._window is not None and self._window.winfo_exists():
             self._save_window_geometry()
             self._window.withdraw()
@@ -896,6 +952,20 @@ class TranscriptReviewer:
         )
         open_folder_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=9)
 
+        help_btn = HoverButton(
+            config_frame,
+            text="Help",
+            icon="?",
+            fg=Color.fg_primary,
+            bg=Color.btn_neutral,
+            hover_bg=Color.btn_neutral_hover,
+            font=(Font.family, Font.size_tiny),
+            padx=10,
+            pady=4,
+            command=self._on_help_click,
+        )
+        help_btn.pack(side=tk.RIGHT, padx=(8, 0), pady=9)
+
         # -- Tooltips --
         ToolTip(self._retranscribe_btn, "Re-transcribe with higher quality settings (Ctrl+R)")
         ToolTip(self._diarize_btn, "Run speaker diarization to identify who said what")
@@ -903,6 +973,7 @@ class TranscriptReviewer:
         ToolTip(self._backend_dropdown, "Select diarization engine")
         ToolTip(self._speaker_count_dropdown, "Expected number of speakers (Auto = let the engine decide)")
         ToolTip(open_folder_btn, "Open the session folder in Explorer")
+        ToolTip(help_btn, "Explain this screen")
 
         # 1px divider below toolbar
         tk.Frame(self._window, bg=Color.border, height=1).pack(fill=tk.X)
@@ -2110,6 +2181,257 @@ class TranscriptReviewer:
             os.startfile(self._selected_session.path)
         else:
             os.startfile(self._output_dir)
+
+    def _on_help_click(self) -> None:
+        """Open the reviewer tutorial from the toolbar."""
+        self._open_tutorial(force=True)
+
+    # ------------------------------------------------------------------
+    # Reviewer tutorial
+    # ------------------------------------------------------------------
+
+    def _open_tutorial(self, force: bool = False) -> None:
+        """Open the tutorial overlay."""
+        if self._window is None or not self._window.winfo_exists():
+            return
+        if not force and not self._tutorial_show_on_open:
+            return
+        if self._tutorial_window is not None and self._tutorial_window.winfo_exists():
+            self._tutorial_window.lift()
+            return
+
+        self._tutorial_step_idx = 0
+        self._window.update_idletasks()
+        review_x = self._window.winfo_rootx()
+        review_y = self._window.winfo_rooty()
+        review_w = self._window.winfo_width()
+        review_h = self._window.winfo_height()
+
+        backdrop = tk.Toplevel(self._window)
+        self._tutorial_backdrop = backdrop
+        backdrop.overrideredirect(True)
+        backdrop.transient(self._window)
+        backdrop.configure(bg=Color.bg_primary)
+        backdrop.geometry(f"{review_w}x{review_h}+{review_x}+{review_y}")
+        try:
+            backdrop.attributes("-alpha", 0.45)
+        except tk.TclError:
+            pass
+        backdrop.bind("<Button-1>", lambda _e: self._close_tutorial())
+
+        win = tk.Toplevel(self._window)
+        self._tutorial_window = win
+        win.title("Reviewer Tutorial")
+        win.configure(bg=Color.bg_primary)
+        win.transient(self._window)
+        win.overrideredirect(True)
+        win.resizable(False, False)
+        card_w = 680
+        card_h = 420
+        card_x = review_x + max(0, (review_w - card_w) // 2)
+        card_y = review_y + max(0, (review_h - card_h) // 2)
+        win.geometry(f"{card_w}x{card_h}+{card_x}+{card_y}")
+        win.protocol("WM_DELETE_WINDOW", self._close_tutorial)
+        win.bind("<Escape>", lambda _e: self._close_tutorial())
+
+        # Keep the walkthrough focused while still allowing easy dismissal.
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+
+        container = tk.Frame(
+            win,
+            bg=Color.bg_primary,
+            padx=16,
+            pady=14,
+            highlightbackground=Color.border,
+            highlightthickness=1,
+        )
+        container.pack(fill=tk.BOTH, expand=True)
+
+        top_row = tk.Frame(container, bg=Color.bg_primary)
+        top_row.pack(fill=tk.X)
+
+        self._tutorial_counter_label = tk.Label(
+            top_row,
+            text="Step 1 of 1",
+            font=(Font.family, Font.size_small),
+            fg=Color.fg_secondary,
+            bg=Color.bg_primary,
+            anchor=tk.W,
+        )
+        self._tutorial_counter_label.pack(side=tk.LEFT)
+
+        close_btn = tk.Button(
+            top_row,
+            text="X",
+            font=(Font.family, Font.size_small, "bold"),
+            fg=Color.fg_primary,
+            bg=Color.btn_neutral,
+            activebackground=Color.btn_neutral_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT,
+            padx=10,
+            cursor="hand2",
+            command=self._close_tutorial,
+        )
+        close_btn.pack(side=tk.RIGHT)
+
+        tk.Frame(container, bg=Color.divider, height=1).pack(fill=tk.X, pady=(8, 12))
+
+        self._tutorial_title_label = tk.Label(
+            container,
+            text="",
+            font=(Font.family, Font.size_title, "bold"),
+            fg=Color.fg_bright,
+            bg=Color.bg_primary,
+            anchor=tk.W,
+            justify=tk.LEFT,
+        )
+        self._tutorial_title_label.pack(fill=tk.X)
+
+        self._tutorial_body_label = tk.Label(
+            container,
+            text="",
+            font=(Font.family, Font.size_body),
+            fg=Color.fg_primary,
+            bg=Color.bg_primary,
+            wraplength=590,
+            justify=tk.LEFT,
+            anchor=tk.NW,
+            padx=4,
+            pady=8,
+        )
+        self._tutorial_body_label.pack(fill=tk.BOTH, expand=True)
+
+        self._tutorial_show_var.set(self._tutorial_show_on_open)
+        show_toggle = tk.Checkbutton(
+            container,
+            text="Show this walkthrough when I open Review",
+            variable=self._tutorial_show_var,
+            command=self._on_tutorial_toggle,
+            font=(Font.family, Font.size_small),
+            fg=Color.fg_secondary,
+            bg=Color.bg_primary,
+            activeforeground=Color.fg_primary,
+            activebackground=Color.bg_primary,
+            selectcolor=Color.bg_input,
+            anchor=tk.W,
+        )
+        show_toggle.pack(fill=tk.X, pady=(2, 10))
+
+        btn_row = tk.Frame(container, bg=Color.bg_primary)
+        btn_row.pack(fill=tk.X)
+
+        self._tutorial_back_btn = tk.Button(
+            btn_row,
+            text="Back",
+            font=(Font.family, Font.size_small),
+            fg=Color.fg_primary,
+            bg=Color.btn_neutral,
+            activebackground=Color.btn_neutral_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT,
+            padx=12,
+            cursor="hand2",
+            command=self._on_tutorial_back,
+        )
+        self._tutorial_back_btn.pack(side=tk.LEFT)
+
+        self._tutorial_next_btn = tk.Button(
+            btn_row,
+            text="Next",
+            font=(Font.family, Font.size_small, "bold"),
+            fg=Color.fg_bright,
+            bg=Color.accent,
+            activebackground=Color.accent_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT,
+            padx=12,
+            cursor="hand2",
+            command=self._on_tutorial_next,
+        )
+        self._tutorial_next_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        self._tutorial_done_btn = tk.Button(
+            btn_row,
+            text="Done",
+            font=(Font.family, Font.size_small, "bold"),
+            fg=Color.fg_bright,
+            bg=Color.success,
+            activebackground=Color.success_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT,
+            padx=12,
+            cursor="hand2",
+            command=self._close_tutorial,
+        )
+        self._tutorial_done_btn.pack(side=tk.RIGHT)
+
+        self._render_tutorial_step()
+        backdrop.lift(self._window)
+        win.lift(backdrop)
+
+    def _render_tutorial_step(self) -> None:
+        """Render the current tutorial step."""
+        if self._tutorial_window is None or not self._tutorial_window.winfo_exists():
+            return
+        total = len(_REVIEWER_TUTORIAL_STEPS)
+        self._tutorial_step_idx = max(0, min(self._tutorial_step_idx, total - 1))
+        title, body = _REVIEWER_TUTORIAL_STEPS[self._tutorial_step_idx]
+
+        self._tutorial_counter_label.configure(
+            text=f"Step {self._tutorial_step_idx + 1} of {total}"
+        )
+        self._tutorial_title_label.configure(text=title)
+        self._tutorial_body_label.configure(text=body)
+        self._tutorial_back_btn.configure(
+            state=tk.NORMAL if self._tutorial_step_idx > 0 else tk.DISABLED
+        )
+        is_last = self._tutorial_step_idx == total - 1
+        self._tutorial_next_btn.configure(
+            state=tk.DISABLED if is_last else tk.NORMAL
+        )
+        self._tutorial_done_btn.configure(
+            bg=Color.accent if is_last else Color.success,
+            activebackground=Color.accent_hover if is_last else Color.success_hover,
+        )
+
+    def _on_tutorial_back(self) -> None:
+        self._tutorial_step_idx -= 1
+        self._render_tutorial_step()
+
+    def _on_tutorial_next(self) -> None:
+        self._tutorial_step_idx += 1
+        self._render_tutorial_step()
+
+    def _on_tutorial_toggle(self) -> None:
+        self._set_tutorial_show_on_open(self._tutorial_show_var.get())
+
+    def _set_tutorial_show_on_open(self, show_on_open: bool) -> None:
+        """Persist the tutorial preference when changed."""
+        if self._tutorial_show_on_open == show_on_open:
+            return
+        self._tutorial_show_on_open = show_on_open
+        if self._on_tutorial_preference_changed:
+            self._on_tutorial_preference_changed(show_on_open)
+
+    def _close_tutorial(self) -> None:
+        """Close tutorial overlay if open."""
+        if self._tutorial_backdrop is not None and self._tutorial_backdrop.winfo_exists():
+            self._tutorial_backdrop.destroy()
+        self._tutorial_backdrop = None
+
+        if self._tutorial_window is None:
+            return
+        if self._tutorial_window.winfo_exists():
+            try:
+                self._tutorial_window.grab_release()
+            except tk.TclError:
+                pass
+            self._tutorial_window.destroy()
+        self._tutorial_window = None
 
     # ------------------------------------------------------------------
     # Button state management

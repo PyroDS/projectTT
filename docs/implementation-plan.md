@@ -186,7 +186,7 @@ tachyon-transcripts/
 
 ### Step 7: Caption Overlay (`ui/overlay.py`)
 - `tkinter` transparent, always-on-top window
-- Positioned bottom-center of screen (like subtitle placement)
+- Positioned bottom-center of screen (like subtitle placement), with final placement recalculated after collapsed height is known to keep consistent bottom anchoring
 - Shows last 3-4 transcript lines with speaker labels
 - Semi-transparent dark background, white text
 - Draggable (click and drag to reposition)
@@ -196,7 +196,7 @@ tachyon-transcripts/
 
 ### Step 8: Config (`config.py`)
 - Simple JSON config file stored in project directory
-- Settings: output_dir, model_size, compute_device, hotkey, overlay_position, overlay_opacity, mic_device, output_device, loopback_devices, diarize_backend, hf_token, first_run_complete, consent_acknowledged, reviewer_geometry, overlay_expanded_size
+- Settings: output_dir, model_size, compute_device, hotkey, overlay_position, overlay_opacity, mic_device, output_device, loopback_devices, diarize_backend, hf_token, first_run_complete, consent_acknowledged, reviewer_geometry, reviewer_tutorial_show_on_open, overlay_expanded_size
 - Defaults that work out of the box — zero config needed to start
 
 ### Step 9: Main Entry Point (`main.py`)
@@ -268,7 +268,7 @@ The saved WAV files (mic.wav + system.wav per session) are the foundation for po
 
 **Implemented post-processing capabilities:**
 - **Re-transcription** (`batch.py`): Re-processes saved WAV files with enhanced Whisper settings (beam search, full-file processing, condition_on_previous_text). Includes crosstalk suppression (RMS energy comparison) and segment deduplication. Produces versioned transcripts (`transcript_v2.md`, etc.).
-- **Transcript review** (`ui/reviewer.py`): Browse past sessions, view transcripts with speaker-colored text, switch between original and batch-transcribed versions, trigger re-transcription with progress tracking.
+- **Transcript review** (`ui/reviewer.py`): Browse past sessions, view transcripts with speaker-colored text, switch between original and batch-transcribed versions, trigger re-transcription with progress tracking, and launch a built-in reviewer walkthrough (auto-shown on open by default as a dimmed, centered overlay over the reviewer window, with a persisted opt-out and toolbar Help button).
 - **Versioned export** (`exporter.py`): `discover_versions()`, `next_version_number()`, `export_transcript_versioned()`, `load_transcript_from_markdown()` — supports multiple transcript versions per session and now writes matching `transcript*.json` sidecars with exact segment timing.
 
 - **Speaker diarization** (`diarizer.py`): Post-processing speaker identification using neural speaker embeddings (speechbrain/pyannote/resemblyzer) + `scikit-learn` AgglomerativeClustering. Splits "Them" into distinct "Speaker 1", "Speaker 2", etc. User can assign real names through inline UI panel. Produces diarized versioned transcripts, JSON sidecars, and `speaker_map.json`. Supports multi-loopback sessions via `device_manifest.json` WAV discovery and now aggregates embeddings from all loopback WAV files instead of selecting only one.

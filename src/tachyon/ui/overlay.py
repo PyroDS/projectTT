@@ -71,6 +71,7 @@ class CaptionOverlay:
     ) -> None:
         self._segment_queue: queue.Queue = segment_queue
         self._position: Optional[tuple[int, int]] = position
+        self._default_position_active: bool = position is None
         self._opacity: float = max(0.0, min(1.0, opacity))
         self._on_close: Optional[Callable[[], None]] = on_close
 
@@ -319,6 +320,7 @@ class CaptionOverlay:
 
     def _on_drag_motion(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         """Move the window to follow the cursor."""
+        self._default_position_active = False
         x: int = event.x_root - self._drag_offset_x
         y: int = event.y_root - self._drag_offset_y
         self._root.geometry(f"+{x}+{y}")
@@ -566,8 +568,14 @@ class CaptionOverlay:
         self._root.update_idletasks()
         label_h: int = self._caption_label.winfo_reqheight()
         total_h: int = Dim.titlebar_height + max(label_h, 1)
-        cur_x: int = self._root.winfo_x()
-        cur_y: int = self._root.winfo_y()
+        if self._position is None and self._default_position_active:
+            screen_w: int = self._root.winfo_screenwidth()
+            screen_h: int = self._root.winfo_screenheight()
+            cur_x = (screen_w - Dim.overlay_width) // 2
+            cur_y = screen_h - total_h - Dim.overlay_bottom_margin
+        else:
+            cur_x = self._root.winfo_x()
+            cur_y = self._root.winfo_y()
         self._root.geometry(
             f"{Dim.overlay_width}x{total_h}+{cur_x}+{cur_y}"
         )
