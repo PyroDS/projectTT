@@ -97,7 +97,7 @@ tachyon-transcripts/
   - `numpy` — audio buffer handling
   - `pystray` — system tray
   - `Pillow` — tray icon image
-  - `keyboard` — global hotkey
+  - native Win32 `RegisterHotKey` via ctypes — global hotkey (no `keyboard` library)
   - `soundfile` — WAV writing
   - `soxr` — high-quality audio resampling (device native rate → 16kHz for Whisper)
 - Create `setup.bat` — creates a local Python venv in the project folder, installs deps, pre-downloads the Whisper model. User runs this once.

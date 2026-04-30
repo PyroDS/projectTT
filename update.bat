@@ -19,7 +19,13 @@ if errorlevel 1 (
 )
 
 echo [2/2] Installing/updating project dependencies...
-.venv\Scripts\pip install -r requirements.txt
+if exist requirements-lock.txt (
+    echo   Using requirements-lock.txt ^(pinned^)...
+    .venv\Scripts\pip install -r requirements-lock.txt
+) else (
+    echo   No lock file found, falling back to requirements.txt...
+    .venv\Scripts\pip install -r requirements.txt
+)
 if errorlevel 1 (
     echo ERROR: Failed to update dependencies.
     pause

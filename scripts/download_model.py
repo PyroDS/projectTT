@@ -42,11 +42,28 @@ def main() -> int:
         print("  Falling back to CPU default model selection.")
         model_size, device, compute_type = "distil-large-v3", "cpu", "int8"
 
-    print(f"  Downloading '{model_size}' for {device} ({compute_type}) ...")
+    from tachyon.model_pins import whisper_revision  # type: ignore
+    revision = whisper_revision(model_size)
+    rev_label = revision[:8] if revision else "<unpinned>"
+    print(
+        f"  Downloading '{model_size}' for {device} ({compute_type}) "
+        f"@ {rev_label} ..."
+    )
 
     from faster_whisper import WhisperModel  # type: ignore
 
+    kwargs: dict = dict(device=device, compute_type=compute_type)
+    if revision is not None:
+        kwargs["revision"] = revision
     try:
+        WhisperModel(model_size, **kwargs)
+    except TypeError:
+        # Older faster-whisper without 'revision' kwarg -- retry unpinned.
+        print(
+            "  [warn] faster-whisper does not accept 'revision' -- "
+            "downloading UNPINNED.",
+            file=sys.stderr,
+        )
         WhisperModel(model_size, device=device, compute_type=compute_type)
     except Exception as exc:  # noqa: BLE001
         print(f"  [error] Model download failed: {exc}", file=sys.stderr)

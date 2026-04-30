@@ -67,9 +67,8 @@ def _set_windows_app_user_model_id() -> None:
         pass
 
 
-import keyboard
-
 from tachyon.config import Config, LoopbackDevice
+from tachyon.hotkey import HotkeyListener
 from tachyon.capture import AudioCapture
 from tachyon.transcriber import Transcriber
 from tachyon.session import Session
@@ -182,6 +181,9 @@ class App:
 
         # Reviewer (created lazily on first open)
         self._reviewer: Optional[TranscriptReviewer] = None
+
+        # Global hotkey listener (initialised in _start_tray_and_hotkey)
+        self._hotkey_listener: Optional[HotkeyListener] = None
 
         # System tray
         self._tray = TrayIcon(
@@ -426,15 +428,21 @@ class App:
         tray_thread = threading.Thread(target=self._tray.run, daemon=True)
         tray_thread.start()
 
-        # Register global hotkey for overlay toggle
+        # Register global hotkey for overlay toggle via native Win32
+        # RegisterHotKey -- avoids the global keyboard hook from the
+        # `keyboard` library that AV products tend to flag.
         try:
-            keyboard.add_hotkey(self._config.hotkey, self._on_toggle_overlay)
-            logger.info("Global hotkey '%s' registered", self._config.hotkey)
+            listener = HotkeyListener(
+                self._config.hotkey, self._on_toggle_overlay,
+            )
+            listener.start()
+            self._hotkey_listener = listener
         except Exception:
             logger.warning(
                 "Failed to register hotkey '%s'", self._config.hotkey,
                 exc_info=True,
             )
+            self._hotkey_listener = None
 
     # ------------------------------------------------------------------
     # Recording lifecycle
@@ -1185,6 +1193,12 @@ class App:
                 logger.warning("Diarize thread did not exit within timeout")
 
         # Tear down components
+        if self._hotkey_listener is not None:
+            try:
+                self._hotkey_listener.stop()
+            except Exception:
+                logger.warning("Error stopping hotkey listener", exc_info=True)
+            self._hotkey_listener = None
         self._tray.stop()
         self._overlay.destroy()
 

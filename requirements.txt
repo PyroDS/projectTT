@@ -9,7 +9,6 @@ nvidia-ml-py>=12.0
 numpy>=1.24.0
 pystray>=0.19.0
 Pillow>=10.0.0
-keyboard>=0.13.5
 soundfile>=0.12.0
 soxr>=0.3.0
 # resemblyzer is installed separately in setup.bat (needs webrtcvad-wheels instead of webrtcvad)

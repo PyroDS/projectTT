@@ -25,6 +25,42 @@ logger = logging.getLogger(__name__)
 # At 16 kHz this is ~1 second of audio context for the model.
 OVERLAP_SAMPLES: int = 16_000
 
+def _load_whisper_pinned(
+    whisper_model_cls: Any,
+    model_size: str,
+    device: str,
+    compute_type: str,
+    revision: Optional[str],
+) -> Any:
+    """Instantiate a faster-whisper ``WhisperModel`` with a pinned revision.
+
+    The ``revision`` kwarg has been part of faster-whisper since 1.0; if
+    we ever run against an older build that does not accept it we fall
+    back to an unpinned load with a loud warning rather than failing.
+    """
+    if revision is None:
+        return whisper_model_cls(
+            model_size, device=device, compute_type=compute_type,
+        )
+    try:
+        return whisper_model_cls(
+            model_size,
+            device=device,
+            compute_type=compute_type,
+            revision=revision,
+        )
+    except TypeError:
+        logger.warning(
+            "faster-whisper does not accept 'revision' kwarg -- "
+            "loading '%s' UNPINNED.  Upgrade faster-whisper to restore "
+            "supply-chain pinning.",
+            model_size,
+        )
+        return whisper_model_cls(
+            model_size, device=device, compute_type=compute_type,
+        )
+
+
 def _resolve_speaker_label(source: str) -> str:
     """Map a raw source tag from AudioCapture to a display speaker label.
 
@@ -130,6 +166,10 @@ class Transcriber:
         DLL, no compatible GPU, out-of-memory, etc.), automatically
         retries on CPU with an appropriate CPU-friendly model.
 
+        Each model load is pinned to a specific HuggingFace commit SHA
+        (see :mod:`tachyon.model_pins`) so a compromised HF account
+        cannot swap the weights without an explicit pin bump.
+
         This is intentionally a separate, explicit call because model
         loading takes several seconds and the caller may want to show a
         loading indicator while it runs.
@@ -141,6 +181,7 @@ class Transcriber:
             recommend_model_size,
             resolve_transcriber_config,
         )
+        from tachyon.model_pins import whisper_revision
 
         # Resolve "auto" values based on hardware.
         device, model_size, compute_type, hw = resolve_transcriber_config(
@@ -152,15 +193,14 @@ class Transcriber:
             compute_type = self._requested_compute_type
 
         # First attempt -- with the resolved config.
+        revision = whisper_revision(model_size)
         try:
             logger.info(
-                "Loading faster-whisper model '%s' on %s (compute_type=%s) ...",
-                model_size, device, compute_type,
+                "Loading faster-whisper model '%s' on %s (compute_type=%s, revision=%s) ...",
+                model_size, device, compute_type, revision or "<unpinned>",
             )
-            self._model = WhisperModel(
-                model_size,
-                device=device,
-                compute_type=compute_type,
+            self._model = _load_whisper_pinned(
+                WhisperModel, model_size, device, compute_type, revision,
             )
             self._model_size = model_size
             self._device = device
@@ -192,15 +232,15 @@ class Transcriber:
             fallback_model = model_size  # honour user's explicit choice
 
         fallback_compute_type = "int8"
+        fallback_revision = whisper_revision(fallback_model)
         logger.info(
-            "Falling back to CPU (model=%s, compute_type=%s) after CUDA load failure.",
-            fallback_model, fallback_compute_type,
+            "Falling back to CPU (model=%s, compute_type=%s, revision=%s) after CUDA load failure.",
+            fallback_model, fallback_compute_type, fallback_revision or "<unpinned>",
         )
         try:
-            self._model = WhisperModel(
-                fallback_model,
-                device="cpu",
-                compute_type=fallback_compute_type,
+            self._model = _load_whisper_pinned(
+                WhisperModel, fallback_model, "cpu", fallback_compute_type,
+                fallback_revision,
             )
             self._model_size = fallback_model
             self._device = "cpu"

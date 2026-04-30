@@ -487,7 +487,20 @@ class FirstRunWizard:
             ),
             font=_BODY_FONT, bg=_BG_COLOR, fg=_FG_COLOR,
             wraplength=_WIN_WIDTH - 72, justify="left",
-        ).pack(anchor="w", pady=(12, 16))
+        ).pack(anchor="w", pady=(12, 8))
+
+        tk.Label(
+            self._page_frame,
+            text=(
+                "⚠  Heads-up: while recording, Tachyon captures every "
+                "sound that comes out of the selected output devices "
+                "— including notifications, other apps, and anything "
+                "spoken aloud near the mic. Recordings are saved to disk "
+                "as unencrypted WAV files in your output folder."
+            ),
+            font=_SMALL_FONT, bg=_BG_COLOR, fg=_WARNING_COLOR,
+            wraplength=_WIN_WIDTH - 72, justify="left",
+        ).pack(anchor="w", pady=(0, 16))
 
         # Build initial check state from existing config
         enabled_names = {

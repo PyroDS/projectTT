@@ -1921,8 +1921,9 @@ class TranscriptReviewer:
             answer = messagebox.askyesno(
                 "Install pyannote?",
                 "pyannote.audio is not installed.\n\n"
-                "Would you like to install it now?\n"
-                "This may take a few minutes.",
+                f"Install {self._PYANNOTE_PINNED_SPEC} now?\n"
+                "This downloads a pinned version from PyPI and may take "
+                "a few minutes.",
                 parent=self._window,
             )
             if answer:
@@ -1948,8 +1949,14 @@ class TranscriptReviewer:
 
         return True
 
+    # Pinned to a specific version so the on-demand install path cannot
+    # silently pull a future release whose API or weights have changed
+    # (or, in the worst case, a compromised PyPI package).  Bump this
+    # constant after smoke-testing locally; do not relax to a range.
+    _PYANNOTE_PINNED_SPEC: str = "pyannote.audio==3.3.2"
+
     def _install_pyannote(self) -> None:
-        """Run ``pip install pyannote.audio`` in a background thread."""
+        """Run a pinned ``pip install`` of pyannote.audio in a background thread."""
         import subprocess
         import sys
         import threading
@@ -1958,12 +1965,16 @@ class TranscriptReviewer:
         self._update_button_state()
         self._progress_bar.configure(mode="indeterminate")
         self._progress_bar.start(15)
-        self._status_label.configure(text="Installing pyannote.audio...")
+        self._status_label.configure(
+            text=f"Installing {self._PYANNOTE_PINNED_SPEC}...",
+        )
+
+        spec = self._PYANNOTE_PINNED_SPEC
 
         def _run() -> None:
             try:
                 result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "pyannote.audio"],
+                    [sys.executable, "-m", "pip", "install", spec],
                     capture_output=True,
                     text=True,
                     timeout=600,

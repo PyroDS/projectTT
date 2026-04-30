@@ -37,6 +37,41 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-04-30 — Security hardening pass (supply chain + native hotkey)
+
+**What was done:**
+- **HuggingFace model pinning**: every HF model the app loads now goes through a pinned commit SHA so a compromised HF account or registry incident cannot silently swap weights (model loads are pickle-deserialization boundaries — malicious weights = code execution on load).
+  - New `src/tachyon/model_pins.py`: single source of truth for `WHISPER_REVISIONS` (large-v3 / medium / small / distil-large-v3), `SPEECHBRAIN_ECAPA_REVISION`, and `PYANNOTE_EMBEDDING_REVISION`. Includes a `whisper_revision()` lookup helper and a header-level recipe for refreshing pins.
+  - `src/tachyon/transcriber.py`: `WhisperModel(...)` now passes `revision=` via a `_load_whisper_pinned()` helper that falls back to unpinned with a loud warning if the installed faster-whisper is too old to accept the kwarg.
+  - `src/tachyon/diarizer.py`: speechbrain `EncoderClassifier.from_hparams(...)` and pyannote `Model.from_pretrained(...)` go through `_load_speechbrain_pinned()` and `_load_pyannote_pinned()` — same pin-with-fallback pattern.
+  - `scripts/download_model.py`: pre-download honours the Whisper pin and prints the short SHA to the user.
+  - `setup.bat`: speechbrain pre-download command imports `model_pins` and passes the pinned `revision`.
+- **Transitive dependency lock**: added `requirements-lock.txt` generated from a known-good `.venv` via `pip freeze`. `setup.bat` and `update.bat` prefer the lock when present and fall back to the human-curated `requirements.txt` otherwise. Lock file deliberately omits `keyboard` (dropped in the same pass — see below).
+- **pyannote.audio install pinning**: `src/tachyon/ui/reviewer.py:_install_pyannote()` now installs `pyannote.audio==3.3.2` (constant `_PYANNOTE_PINNED_SPEC`) instead of the unbounded `pyannote.audio`, eliminating the "compromised PyPI account = arbitrary code execution" path on the on-demand install. The install-prompt also names the pinned version so the user sees what they're agreeing to.
+- **First-run wizard system-audio scope warning**: added a yellow warning to the loopback-picker page (`src/tachyon/ui/wizard.py:_render_loopback`) explaining that *all* system audio is captured during recording — including notifications, other apps, and anything spoken aloud near the mic — and that recordings are saved as unencrypted WAV files.
+- **Replaced `keyboard` library with native Win32 `RegisterHotKey`**:
+  - New `src/tachyon/hotkey.py`: `HotkeyListener` class + `parse_hotkey()` parser. Spawns a daemon thread that registers a single hotkey via `RegisterHotKey(NULL, …)` and pumps Win32 messages with `GetMessageW`. Teardown via `PostThreadMessageW(WM_QUIT)` + `UnregisterHotKey`. Handles modifiers (`ctrl`/`alt`/`shift`/`win` + aliases), letter/digit keys, and named keys (F1–F12, space, enter, esc, arrows, etc.). Falls back to a logged warning if registration fails.
+  - `src/tachyon/main.py`: dropped `import keyboard`; `_start_tray_and_hotkey()` now spins up a `HotkeyListener`. `_on_quit()` tears it down before stopping the tray.
+  - `requirements.txt`: removed `keyboard>=0.13.5`.
+  - `installer/tachyon.spec`: dropped `keyboard` from `hidden_imports` (`pystray._win32` retained).
+  - `CLAUDE.md` + `docs/implementation-plan.md`: tech-stack note updated.
+
+**Decisions made:**
+- **Pin via fallback rather than hard-fail.** Each pinned-model loader (`_load_whisper_pinned`, `_load_speechbrain_pinned`, `_load_pyannote_pinned`) catches `TypeError` from older library versions that do not accept `revision=` and falls back to an unpinned load with a `logger.warning`. The right fix to a missing pin is upgrading the library; the fallback is so a stale dev environment does not brick the app.
+- **pyannote pinned to 3.3.2 not 4.x.** The current diarizer uses `Model.from_pretrained("pyannote/embedding", token=...)` and `Inference(model, window="whole")`, both stable across 3.x. 4.x is the latest on PyPI but introduces API changes that are not pre-tested here. 3.3.2 is the last 3.x release and matches the existing diarizer code.
+- **Lock file kept inclusive (pyinstaller, pytest).** Filtering dev-only packages out of the freeze creates two locks to maintain. Kept everything that was actually resolved together; the few extra MB are harmless on a runtime install.
+- **`RegisterHotKey` over `pynput`/`global-hotkeys`.** Native Win32 means zero new dependencies, no global keyboard hook (so AV products do not flag it), and the implementation is ~200 lines that fit the one-hotkey use case exactly. `keyboard` was unmaintained since 2019 and was the single biggest reason AV products flagged the PyInstaller bundle.
+- **Warning placement on the loopback page, not the consent page.** The consent page already covers legal exposure; the technical "what gets captured" question naturally belongs on the page where the user picks the capture device.
+
+**Verification:**
+- `pytest tests/` — all 27 tests pass.
+- `python -c "from tachyon.model_pins import whisper_revision; ..."` — pins resolve.
+- `HotkeyListener('ctrl+shift+alt+f10', cb).start(); .stop()` — actually claims and releases a Win32 hotkey via the message loop without error.
+- `from tachyon import transcriber, diarizer, main, hotkey` — all import cleanly with `keyboard` uninstalled (it's still in the venv from the old install but no code references it anymore).
+
+**Issues encountered:**
+- None. Existing `.venv` still has the `keyboard` package installed; users on old venvs will keep it until they re-`setup.bat` against the new lock file. No runtime impact.
+
 ### 2026-04-29 — Floating circular Help button in reviewer (replaces toolbar Help)
 
 **What was done:**

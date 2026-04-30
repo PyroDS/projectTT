@@ -71,8 +71,8 @@ for pkg in ("speechbrain", "resemblyzer", "sklearn"):
 # Hardware-detection paths — tried in order at runtime.
 hidden_imports += ["pynvml", "torch", "torch.cuda"]
 
-# Misc: keyboard uses ctypes bindings that show up as dynamic imports.
-hidden_imports += ["keyboard", "pystray._win32"]
+# Misc: pystray's Win32 backend resolves dynamically.
+hidden_imports += ["pystray._win32"]
 
 # ---------------------------------------------------------------------------
 # Data files + dynamic libraries

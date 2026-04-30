@@ -48,6 +48,12 @@ import soxr
 from tachyon.config import PROJECT_ROOT
 from tachyon.session import TranscriptSegment
 from tachyon.exporter import load_transcript_from_markdown
+from tachyon.model_pins import (
+    PYANNOTE_EMBEDDING_REPO,
+    PYANNOTE_EMBEDDING_REVISION,
+    SPEECHBRAIN_ECAPA_REPO,
+    SPEECHBRAIN_ECAPA_REVISION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -518,10 +524,8 @@ class Diarizer:
                 if not hasattr(torchaudio, "list_audio_backends"):
                     torchaudio.list_audio_backends = lambda: ["soundfile"]
                 from speechbrain.inference.speaker import EncoderClassifier
-                self._encoder = EncoderClassifier.from_hparams(
-                    source="speechbrain/spkrec-ecapa-voxceleb",
-                    savedir=_SPEECHBRAIN_SAVEDIR,
-                    run_opts={"device": "cpu"},
+                self._encoder = _load_speechbrain_pinned(
+                    EncoderClassifier, _SPEECHBRAIN_SAVEDIR,
                 )
             elif backend == "pyannote":
                 from pyannote.audio import Model, Inference
@@ -530,10 +534,7 @@ class Diarizer:
                         "pyannote backend requires a HuggingFace token. "
                         "Set hf_token in config.json or enter it when prompted."
                     )
-                model = Model.from_pretrained(
-                    "pyannote/embedding",
-                    token=self._config.hf_token,
-                )
+                model = _load_pyannote_pinned(Model, self._config.hf_token)
                 self._encoder = Inference(model, window="whole")
             elif backend == "resemblyzer":
                 from resemblyzer import VoiceEncoder
@@ -1005,3 +1006,57 @@ def _parse_speaker_number(name: str) -> int:
         return int(name.split()[-1])
     except (ValueError, IndexError):
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Pinned model loaders
+# ---------------------------------------------------------------------------
+
+def _load_speechbrain_pinned(encoder_cls: Any, savedir: str) -> Any:
+    """Load the speechbrain ECAPA encoder pinned to a known commit.
+
+    Falls back to an unpinned load with a loud warning if the installed
+    speechbrain build does not accept ``revision`` -- prefer upgrading
+    speechbrain rather than running unpinned.
+    """
+    common_kwargs: dict[str, Any] = dict(
+        source=SPEECHBRAIN_ECAPA_REPO,
+        savedir=savedir,
+        run_opts={"device": "cpu"},
+    )
+    try:
+        return encoder_cls.from_hparams(
+            revision=SPEECHBRAIN_ECAPA_REVISION, **common_kwargs,
+        )
+    except TypeError:
+        logger.warning(
+            "speechbrain.from_hparams does not accept 'revision' -- "
+            "loading %s UNPINNED.  Upgrade speechbrain to restore "
+            "supply-chain pinning.",
+            SPEECHBRAIN_ECAPA_REPO,
+        )
+        return encoder_cls.from_hparams(**common_kwargs)
+
+
+def _load_pyannote_pinned(model_cls: Any, hf_token: str) -> Any:
+    """Load the pyannote embedding model pinned to a known commit.
+
+    Falls back to unpinned load with a warning if the installed
+    pyannote build does not accept ``revision``.
+    """
+    try:
+        return model_cls.from_pretrained(
+            PYANNOTE_EMBEDDING_REPO,
+            token=hf_token,
+            revision=PYANNOTE_EMBEDDING_REVISION,
+        )
+    except TypeError:
+        logger.warning(
+            "pyannote.Model.from_pretrained does not accept 'revision' -- "
+            "loading %s UNPINNED.  Upgrade pyannote.audio to restore "
+            "supply-chain pinning.",
+            PYANNOTE_EMBEDDING_REPO,
+        )
+        return model_cls.from_pretrained(
+            PYANNOTE_EMBEDDING_REPO, token=hf_token,
+        )

@@ -24,7 +24,7 @@ After completing any task:
 - **Audio**: `sounddevice` (WASAPI mic), `PyAudioWPatch` (WASAPI loopback), `soxr` (resampling), `soundfile` (WAV I/O)
 - **Transcription**: `faster-whisper` (CTranslate2 + CUDA), Whisper large-v3
 - **UI**: `tkinter` (overlay), `pystray` (system tray), `Pillow` (icons)
-- **Hotkeys**: `keyboard`
+- **Hotkeys**: native Win32 `RegisterHotKey` via ctypes (`tachyon.hotkey`)
 - **Target GPU**: NVIDIA 2080 Ti (11GB VRAM)
 
 ## Project Structure
