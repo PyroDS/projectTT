@@ -37,6 +37,23 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-05-08 — v0.1.2 public release notes alignment
+
+**What was done:**
+- Updated `CHANGELOG.md` so the public release entry matches the current app/installer version (`0.1.2`) instead of calling `0.1.0` the first public release.
+- Moved the existing unreleased startup/model-loading fixes into the `0.1.2` release entry.
+- Added `docs/release-notes-v0.1.2.md` as a concise GitHub release-notes source for the first public tag.
+
+**Decisions made:**
+- Kept `0.1.0` in the changelog as release-preparation history, but changed its heading away from "First public release" to avoid conflicting with the `v0.1.2` tag and installer filename.
+- Kept the release notes intentionally overlapping with the README so the GitHub release page can stand alone for first-time visitors.
+
+**Verification:**
+- Documentation-only change; no test run needed.
+
+**Issues encountered:**
+- None.
+
 ### 2026-04-30 — Source CUDA DLL discovery fix
 
 **What was done:**
