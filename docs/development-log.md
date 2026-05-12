@@ -37,6 +37,24 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-05-11 — Rebuilt v0.1.3 installer from updated environment
+
+**What was done:**
+- Refreshed the project virtualenv using the update steps from `update.bat`, routed through `.venv\Scripts\python -m pip` so the active project venv was used.
+- Rebuilt the Windows installer with `installer\build_installer.bat`.
+- Produced `installer\dist\TachyonTranscripts-Setup-0.1.3.exe`.
+- Updated `installer/README.md` to use a version placeholder in the generated installer filename example instead of the stale `0.1.2` value.
+
+**Verification:**
+- Confirmed source CLI version: `Tachyon Transcripts 0.1.3`.
+- Confirmed generated installer: `installer\dist\TachyonTranscripts-Setup-0.1.3.exe`.
+- Installer size: 1621.84 MB.
+- SHA256: `B78F52B12077A51D1D4566B52EB3960399D37500F58020105D925BE30DEE9D03`.
+- Confirmed bundled CUDA guard files exist in the PyInstaller output: `cublas64_12.dll` and `cudnn64_9.dll`.
+
+**Issues encountered:**
+- The first PyInstaller run failed because the obsolete `typing==3.7.4.3` backport was installed in the Python 3.11 venv. Removed it with `.venv\Scripts\python -m pip uninstall -y typing`; it is not listed in `requirements.txt` or `requirements-lock.txt`.
+
 ### 2026-05-11 — v0.1.3 build bump
 
 **What was done:**

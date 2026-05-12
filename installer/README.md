@@ -30,7 +30,7 @@ The script does five things:
 2. Generates `assets\icon.ico` from `scripts\make_icon.py` (same visual design as the tray icon, packed as a multi-resolution ICO).
 3. Wipes any stale `build\` and `dist\` output.
 4. Runs PyInstaller against `tachyon.spec` to produce `dist\TachyonTranscripts\TachyonTranscripts.exe` plus its supporting DLL / data bundle (~500 MB–1.2 GB depending on CUDA DLLs present).
-5. Runs Inno Setup against `Tachyon.iss`, which compresses that folder into a single `installer\dist\TachyonTranscripts-Setup-0.1.2.exe`.
+5. Runs Inno Setup against `Tachyon.iss`, which compresses that folder into a single `installer\dist\TachyonTranscripts-Setup-<version>.exe`.
 
 Total build time on a warm machine: 3–8 minutes.
 
