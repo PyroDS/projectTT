@@ -23,6 +23,24 @@ Every meeting-transcription tool I could find either (a) uploaded audio to someb
 - **Consent gate** — recording is disabled until the disclaimer is acknowledged.
 - **No telemetry** — no analytics, no network calls, no cloud services. The only outbound request is the first-time model download from HuggingFace (which you can pre-cache from the installer).
 
+## Screenshots
+
+The transparent caption overlay shows the last few lines of transcription, stays on top of other windows, and can be toggled with a global hotkey. It has a compact mode for staying out of the way during a meeting:
+
+![Live caption overlay — compact](docs/screenshots/overlay-compact.png)
+
+…and an expanded mode for reading more context at a glance:
+
+![Live caption overlay — expanded](docs/screenshots/overlay-expanded.png)
+
+The Review window lists past sessions and lets you re-transcribe with higher-accuracy settings, run speaker diarization, or edit the transcript by hand:
+
+![Transcript review window](docs/screenshots/review.png)
+
+Everything is driven from the system tray — start/stop recording, toggle captions, pick devices, open the review window:
+
+![System tray menu](docs/screenshots/tray.png)
+
 ## Install
 
 Two paths. Pick whichever suits you.
