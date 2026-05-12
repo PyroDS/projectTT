@@ -6,6 +6,23 @@ Nothing leaves your machine.
 
 > **Legal notice — please read before using.** Tachyon Transcripts is a recording tool. Recording other people without their knowledge or consent is illegal in many jurisdictions. **We are not lawyers and nothing in this project is legal advice. You are solely responsible for checking the laws that apply to you and using this software lawfully.** See [docs/LEGAL.md](docs/LEGAL.md) and the first-run wizard's consent page for a non-lawyer overview of the questions to ask. The app will not let you start a recording until you have acknowledged the disclaimer.
 
+## Contents
+
+- [Why this exists](#why-this-exists)
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Install](#install)
+  - [A. Installer (recommended for end users)](#a-installer-recommended-for-end-users)
+  - [B. From source (for developers)](#b-from-source-for-developers)
+- [Quick start](#quick-start)
+- [Output layout](#output-layout)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Legal](#legal)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 ## Why this exists
 
 Every meeting-transcription tool I could find either (a) uploaded audio to somebody else's server, (b) required a subscription, or (c) was bolted into one specific meeting platform. I wanted something that worked for any audio my computer played — Zoom, Teams, Meet, a phone call through a headset, a YouTube video I was taking notes on — without sharing the contents with a third party. Tachyon Transcripts is what I built for myself and now share with others who want the same.
@@ -16,6 +33,7 @@ Every meeting-transcription tool I could find either (a) uploaded audio to someb
 - **Multi-device loopback** — capture multiple output devices simultaneously (e.g. "Chat" headset + "Game" speakers) and keep them as separate channels in the output.
 - **Live captions** — transparent, always-on-top overlay with the last few lines of transcription, draggable, toggleable via a global hotkey.
 - **Hardware-aware model selection** — large-v3 on a 10 GB+ NVIDIA card, medium on smaller GPUs, distil-large-v3 (int8) on CPU. Auto-detected; override in the config if needed.
+- **Tunable live caption modes** — `Fast Live`, `Balanced Live` (default), and `Accurate Live` selectable from the tray. Modes adjust chunk duration, overlap, and decode beam size to trade latency for accuracy without changing models. The choice is persisted; switching mid-recording saves immediately and applies on the next recording.
 - **Graceful CPU fallback** — if CUDA fails at startup (missing DLL, outdated driver, no NVIDIA card), the app falls back to a CPU-friendly model and tells you in a tray notification.
 - **Offline batch re-transcription** — once a recording is saved, re-run Whisper with beam search + VAD + crosstalk suppression + deduplication for noticeably better accuracy than the real-time pass.
 - **Speaker diarization** — identify who spoke when, using your choice of SpeechBrain ECAPA-TDNN (default), pyannote (optional, higher accuracy, requires a HuggingFace token), or Resemblyzer (lightweight fallback).
@@ -40,6 +58,10 @@ The Review window lists past sessions and lets you re-transcribe with higher-acc
 Everything is driven from the system tray — start/stop recording, toggle captions, pick devices, open the review window:
 
 ![System tray menu](docs/screenshots/tray.png)
+
+The new **Live Caption Mode** submenu (v0.1.3) lets you pick a real-time transcription profile without leaving the tray. The asterisk marks the active mode:
+
+![Live Caption Mode submenu](docs/screenshots/tray-live-caption-mode.png)
 
 ## Install
 

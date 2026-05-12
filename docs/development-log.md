@@ -37,6 +37,25 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-05-11 — v0.1.3 build bump
+
+**What was done:**
+- Bumped app version `0.1.2` → `0.1.3` in the two locations that hold it:
+  - `installer/Tachyon.iss` (`MyAppVersion`).
+  - `src/tachyon/main.py` (`--version` CLI string).
+- Ran `installer\build_installer.bat` to produce `installer\dist\TachyonTranscripts-Setup-0.1.3.exe`.
+
+**Decisions made:**
+- Maintenance/build-cadence release; per user, CHANGELOG and `docs/release-notes-v0.1.3.md` were intentionally not added — the only source delta since `v0.1.2` was a `README.md` trim (acknowledgments section removed).
+- Kept the `0.1.2` release-notes file as-is for the existing GitHub release tag.
+
+**Verification:**
+- Confirmed `installer\dist\TachyonTranscripts-Setup-0.1.3.exe` exists after the build.
+- Build script also re-runs its `_internal\cuda\cublas64_12.dll` + `cudnn64_9.dll` guard before invoking Inno Setup.
+
+**Issues encountered:**
+- None.
+
 ### 2026-05-08 — v0.1.2 public release notes alignment
 
 **What was done:**
