@@ -52,7 +52,7 @@ import soundfile as sf
 import soxr
 
 from tachyon.config import PROJECT_ROOT
-from tachyon.session import TranscriptSegment
+from tachyon.session import TranscriptSegment, WordTiming
 from tachyon.exporter import load_transcript_from_markdown
 from tachyon.model_pins import (
     HF_TOKEN_SETTINGS_URL,
@@ -553,6 +553,7 @@ class Diarizer:
                 text=seg.text,
                 start_time=seg.start_time,
                 end_time=estimated_end,
+                words=seg.words,
             ))
 
         return fixed
@@ -847,34 +848,9 @@ class Diarizer:
     # Step 6: Segment relabeling from timeline
     # ------------------------------------------------------------------
 
-    def _relabel_from_timeline(
-        self,
-        all_segments: list[TranscriptSegment],
-        timeline: dict[int, int],
-        labels: np.ndarray,
-        resolution_sec: float = 0.25,
-        preserve_you: bool = True,
-    ) -> list[TranscriptSegment]:
-        """Assign speaker labels to segments using the per-second timeline.
-
-        For each segment, looks up its time range in the timeline and
-        assigns the speaker with the most seconds covered.  When
-        *preserve_you* is True (system mode), ``"You"`` segments pass
-        through unchanged.  When False (mixed mode), all segments are
-        relabeled.
-
-        Parameters
-        ----------
-        all_segments:
-            All transcript segments (both "You" and non-"You").
-        timeline:
-            Per-second speaker mapping from _build_speaker_timeline().
-        labels:
-            Raw cluster labels (used to build cluster → speaker number mapping).
-        preserve_you:
-            If True, keep ``"You"`` segments unchanged.
-        """
-        # Build mapping: cluster label → speaker number (by first appearance in labels)
+    @staticmethod
+    def _build_cluster_to_speaker_map(labels: np.ndarray) -> dict[int, int]:
+        """Map raw cluster labels to 1-based speaker numbers by first appearance."""
         first_appearance: dict[int, int] = {}
         for i, label in enumerate(labels):
             label_int = int(label)
@@ -884,39 +860,179 @@ class Diarizer:
         sorted_clusters = sorted(first_appearance.items(), key=lambda x: x[1])
         cluster_to_speaker: dict[int, int] = {}
         for idx, (cluster_label, _) in enumerate(sorted_clusters):
-            cluster_to_speaker[cluster_label] = idx + 1  # 1-based
+            cluster_to_speaker[cluster_label] = idx + 1
+        return cluster_to_speaker
 
-        # Relabel segments
+    @staticmethod
+    def _timeline_cluster_at(
+        timeline: dict[int, int],
+        resolution_sec: float,
+        timestamp: float,
+    ) -> Optional[int]:
+        """Look up the cluster label covering *timestamp* in the speaker timeline."""
+        if timestamp < 0:
+            timestamp = 0.0
+        bin_idx = int(timestamp / resolution_sec)
+        if bin_idx in timeline:
+            return timeline[bin_idx]
+
+        # Search outward for the nearest labeled bin.
+        for offset in range(1, 40):
+            left = bin_idx - offset
+            right = bin_idx + offset
+            if left in timeline:
+                return timeline[left]
+            if right in timeline:
+                return timeline[right]
+        return None
+
+    @staticmethod
+    def _speaker_num_at_time(
+        timeline: dict[int, int],
+        cluster_to_speaker: dict[int, int],
+        resolution_sec: float,
+        timestamp: float,
+        fallback: int = 1,
+    ) -> int:
+        """Resolve a 1-based speaker number at *timestamp*."""
+        cluster_label = Diarizer._timeline_cluster_at(
+            timeline, resolution_sec, timestamp,
+        )
+        if cluster_label is None:
+            return fallback
+        return cluster_to_speaker.get(cluster_label, fallback)
+
+    @staticmethod
+    def _segment_from_words(
+        speaker: str,
+        words: list[WordTiming],
+    ) -> TranscriptSegment:
+        """Build a transcript segment from a contiguous run of words."""
+        text = "".join(w.text for w in words).strip()
+        return TranscriptSegment(
+            speaker=speaker,
+            text=text,
+            start_time=words[0].start_time,
+            end_time=words[-1].end_time,
+            words=list(words),
+        )
+
+    def _relabel_segment_majority_vote(
+        self,
+        seg: TranscriptSegment,
+        timeline: dict[int, int],
+        cluster_to_speaker: dict[int, int],
+        resolution_sec: float,
+    ) -> TranscriptSegment:
+        """Assign one speaker label to a whole segment via timeline majority vote."""
+        start_sec = int(seg.start_time / resolution_sec)
+        end_sec = int(math.ceil(seg.end_time / resolution_sec))
+        if end_sec <= start_sec:
+            end_sec = start_sec + 1
+
+        votes: dict[int, int] = {}
+        for sec in range(start_sec, end_sec + 1):
+            cluster_label = timeline.get(sec)
+            if cluster_label is not None:
+                speaker_num = cluster_to_speaker.get(cluster_label, 1)
+                votes[speaker_num] = votes.get(speaker_num, 0) + 1
+
+        if votes:
+            speaker_num = max(votes, key=votes.get)  # type: ignore[arg-type]
+        else:
+            speaker_num = 1
+
+        return TranscriptSegment(
+            speaker=f"Speaker {speaker_num}",
+            text=seg.text,
+            start_time=seg.start_time,
+            end_time=seg.end_time,
+            words=seg.words,
+        )
+
+    def _relabel_segment_by_words(
+        self,
+        seg: TranscriptSegment,
+        timeline: dict[int, int],
+        cluster_to_speaker: dict[int, int],
+        resolution_sec: float,
+    ) -> list[TranscriptSegment]:
+        """Split a segment at speaker-change boundaries using word timings."""
+        if not seg.words:
+            return [self._relabel_segment_majority_vote(
+                seg, timeline, cluster_to_speaker, resolution_sec,
+            )]
+
+        split_segments: list[TranscriptSegment] = []
+        current_speaker: Optional[str] = None
+        current_words: list[WordTiming] = []
+
+        for word in seg.words:
+            midpoint = (word.start_time + word.end_time) / 2.0
+            speaker_num = self._speaker_num_at_time(
+                timeline,
+                cluster_to_speaker,
+                resolution_sec,
+                midpoint,
+            )
+            speaker_label = f"Speaker {speaker_num}"
+
+            if current_speaker != speaker_label:
+                if current_words:
+                    split_segments.append(
+                        self._segment_from_words(current_speaker, current_words),
+                    )
+                current_speaker = speaker_label
+                current_words = [word]
+            else:
+                current_words.append(word)
+
+        if current_words and current_speaker is not None:
+            split_segments.append(
+                self._segment_from_words(current_speaker, current_words),
+            )
+
+        return split_segments or [self._relabel_segment_majority_vote(
+            seg, timeline, cluster_to_speaker, resolution_sec,
+        )]
+
+    def _relabel_from_timeline(
+        self,
+        all_segments: list[TranscriptSegment],
+        timeline: dict[int, int],
+        labels: np.ndarray,
+        resolution_sec: float = 0.25,
+        preserve_you: bool = True,
+    ) -> list[TranscriptSegment]:
+        """Assign speaker labels using the per-second timeline.
+
+        When word timings are available on a segment, each word is aligned
+        to the diarization timeline and the segment is split whenever the
+        assigned speaker changes.  Segments without word metadata fall back
+        to whole-segment majority voting.
+        """
+        cluster_to_speaker = self._build_cluster_to_speaker_map(labels)
+
         relabeled: list[TranscriptSegment] = []
         for seg in all_segments:
             if preserve_you and seg.speaker == "You":
                 relabeled.append(seg)
                 continue
 
-            # Count speaker votes from timeline bins covering this segment
-            start_sec = int(seg.start_time / resolution_sec)
-            end_sec = int(math.ceil(seg.end_time / resolution_sec))
-            if end_sec <= start_sec:
-                end_sec = start_sec + 1  # minimum one-bin span
-
-            votes: dict[int, int] = {}
-            for sec in range(start_sec, end_sec + 1):
-                cluster_label = timeline.get(sec)
-                if cluster_label is not None:
-                    speaker_num = cluster_to_speaker.get(cluster_label, 1)
-                    votes[speaker_num] = votes.get(speaker_num, 0) + 1
-
-            if votes:
-                speaker_num = max(votes, key=votes.get)  # type: ignore[arg-type]
+            if seg.words:
+                relabeled.extend(self._relabel_segment_by_words(
+                    seg,
+                    timeline,
+                    cluster_to_speaker,
+                    resolution_sec,
+                ))
             else:
-                speaker_num = 1  # fallback if no timeline coverage
-
-            relabeled.append(TranscriptSegment(
-                speaker=f"Speaker {speaker_num}",
-                text=seg.text,
-                start_time=seg.start_time,
-                end_time=seg.end_time,
-            ))
+                relabeled.append(self._relabel_segment_majority_vote(
+                    seg,
+                    timeline,
+                    cluster_to_speaker,
+                    resolution_sec,
+                ))
 
         return relabeled
 
@@ -943,12 +1059,18 @@ class Diarizer:
 
         for seg in segments[1:]:
             if seg.speaker == current.speaker:
+                merged_words: Optional[list[WordTiming]] = None
+                if current.words or seg.words:
+                    merged_words = list(current.words or [])
+                    if seg.words:
+                        merged_words.extend(seg.words)
                 # Same speaker — merge text and extend end_time
                 current = TranscriptSegment(
                     speaker=current.speaker,
                     text=current.text + " " + seg.text,
                     start_time=current.start_time,
                     end_time=seg.end_time,
+                    words=merged_words,
                 )
             else:
                 # Different speaker — flush current, start new

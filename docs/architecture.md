@@ -93,7 +93,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Transcribes with `word_timestamps=True` to get precise word boundaries
   - Trims output to only include words from the new audio portion (based on timestamp comparison)
   - VAD (Silero, built into faster-whisper) skips silent chunks automatically
-  - Emits `TranscriptSegment(speaker: str, text: str, start_time: float, end_time: float)` via callback
+  - Emits `TranscriptSegment(speaker: str, text: str, start_time: float, end_time: float, words?: list[WordTiming])` via callback; word timings are session-relative and stored in JSON sidecars for diarization
 
 ### `session.py` — Session Manager
 - **Owns**: Recording session lifecycle, segment accumulation
@@ -114,7 +114,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
 - **Key details**:
   - Creates per-session output folder: `output/YYYY-MM-DD_HHMMSS/`
   - Generates `transcript.md` with header (date, duration, audio links) + timestamped speaker-labeled lines
-  - Writes a lossless sidecar (`transcript.json` / `transcript_vN.json`) with exact float `start`/`end` timings per segment
+  - Writes a lossless sidecar (`transcript.json` / `transcript_vN.json`) with exact float `start`/`end` timings per segment and optional per-word timings (schema v2)
   - Audio files are moved/copied into `audio/` subfolder alongside the markdown
 
 ### `hardware.py` — Hardware Detection
@@ -220,6 +220,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Clustering via `scikit-learn`: Agglomerative (ward linkage) with max-silhouette auto speaker count (2-8)
   - Multi-loopback aggregation: embeddings from all loopback WAVs are clustered together in system mode
   - 250ms speaker timeline built from window labels via majority vote
+  - When JSON sidecar word timings are present, each word is aligned to the timeline and segments are split at speaker-change boundaries; otherwise whole-segment majority voting is used
   - Transcript segments relabeled from timeline using exact segment `start`/`end` timing from sidecar data
   - Optional fixed speaker-count hint (`num_speakers`) can be supplied from reviewer UI
   - Speaker map persisted as `speaker_map.json` for user-assigned names

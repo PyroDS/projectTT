@@ -22,7 +22,7 @@ from tachyon.model_pins import (
     PYANNOTE_EMBEDDING_REVISION,
     PYANNOTE_EMBEDDING_URL,
 )
-from tachyon.session import TranscriptSegment
+from tachyon.session import TranscriptSegment, WordTiming
 
 
 def test_discover_loopback_wavs_from_manifest(tmp_path: Path) -> None:
@@ -183,6 +183,58 @@ def test_relabel_from_timeline_mixed_mode_relabels_you() -> None:
 
     assert relabeled[0].speaker == "Speaker 1"
     assert relabeled[1].speaker == "Speaker 2"
+
+
+def test_relabel_segment_by_words_splits_on_speaker_change() -> None:
+    diarizer = Diarizer()
+    segment = TranscriptSegment(
+        speaker="Them",
+        text="hello there goodbye",
+        start_time=0.0,
+        end_time=1.25,
+        words=[
+            WordTiming("hello ", 0.0, 0.4),
+            WordTiming("there ", 0.4, 0.8),
+            WordTiming("goodbye", 1.0, 1.25),
+        ],
+    )
+    timeline = {i: 10 for i in range(4)}
+    timeline.update({i: 20 for i in range(4, 8)})
+    labels = np.array([10, 20], dtype=np.int32)
+    cluster_map = Diarizer._build_cluster_to_speaker_map(labels)
+
+    split = diarizer._relabel_segment_by_words(
+        segment, timeline, cluster_map, resolution_sec=0.25,
+    )
+
+    assert len(split) == 2
+    assert split[0].speaker == "Speaker 1"
+    assert "hello" in split[0].text
+    assert split[1].speaker == "Speaker 2"
+    assert "goodbye" in split[1].text
+
+
+def test_relabel_from_timeline_without_words_keeps_majority_vote() -> None:
+    diarizer = Diarizer()
+    segments = [
+        TranscriptSegment("Them", "mixed block", 0.0, 1.0),
+    ]
+    timeline = {
+        0: 10, 1: 10, 2: 10,
+        3: 20, 4: 20,
+    }
+    labels = np.array([10, 20], dtype=np.int32)
+
+    relabeled = diarizer._relabel_from_timeline(
+        segments,
+        timeline,
+        labels,
+        resolution_sec=0.25,
+        preserve_you=False,
+    )
+
+    assert len(relabeled) == 1
+    assert relabeled[0].speaker == "Speaker 1"
 
 
 def test_pyannote_access_message_includes_hf_urls() -> None:

@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from tachyon.capture import AudioChunk
-from tachyon.session import TranscriptSegment
+from tachyon.session import TranscriptSegment, WordTiming
 
 logger = logging.getLogger(__name__)
 
@@ -558,12 +558,21 @@ class Transcriber:
                 session_offset = chunk.timestamp - self._session_start_time
                 start_time = session_offset + kept_words[0]["start"]
                 end_time = session_offset + kept_words[-1]["end"]
+                word_timings = [
+                    WordTiming(
+                        text=w["text"],
+                        start_time=session_offset + w["start"],
+                        end_time=session_offset + w["end"],
+                    )
+                    for w in kept_words
+                ]
 
                 seg = TranscriptSegment(
                     speaker=speaker,
                     text=text,
                     start_time=start_time,
                     end_time=end_time,
+                    words=word_timings,
                 )
                 logger.debug(
                     "Segment [%s] %.2fs-%.2fs: %s",

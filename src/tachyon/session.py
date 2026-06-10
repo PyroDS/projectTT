@@ -10,9 +10,24 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
+
+
+@dataclass
+class WordTiming:
+    """Word-level timing within a transcript segment.
+
+    Attributes:
+        text: The word text as returned by Whisper (may include leading space).
+        start_time: Session-relative start offset in seconds.
+        end_time: Session-relative end offset in seconds.
+    """
+
+    text: str
+    start_time: float
+    end_time: float
 
 
 @dataclass
@@ -24,12 +39,14 @@ class TranscriptSegment:
         text: The transcribed text content.
         start_time: Offset in seconds from the session start when speech began.
         end_time: Offset in seconds from the session start when speech ended.
+        words: Optional per-word timings for diarization alignment.
     """
 
     speaker: str
     text: str
     start_time: float
     end_time: float
+    words: Optional[list[WordTiming]] = field(default=None, compare=False)
 
 
 class Session:

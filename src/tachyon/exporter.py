@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional, Protocol, Sequence
 
 log = logging.getLogger(__name__)
-_TRANSCRIPT_SCHEMA_VERSION = 1
+_TRANSCRIPT_SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +37,7 @@ class TranscriptSegmentLike(Protocol):
     text: str
     start_time: float
     end_time: float
+    words: Optional[list[object]]
 
 
 class SessionLike(Protocol):
@@ -142,15 +143,34 @@ def _serialize_segments(
     segments: Sequence[TranscriptSegmentLike],
 ) -> list[dict[str, object]]:
     """Serialize transcript segments to JSON-compatible dicts."""
+    from tachyon.session import WordTiming
+
     serialized: list[dict[str, object]] = []
     for idx, segment in enumerate(segments, start=1):
-        serialized.append({
+        item: dict[str, object] = {
             "id": f"seg_{idx:04d}",
             "speaker": segment.speaker,
             "text": segment.text,
             "start": float(segment.start_time),
             "end": float(segment.end_time),
-        })
+        }
+        raw_words = getattr(segment, "words", None)
+        if raw_words:
+            item["words"] = [
+                {
+                    "text": w.text,
+                    "start": float(w.start_time),
+                    "end": float(w.end_time),
+                }
+                if isinstance(w, WordTiming)
+                else {
+                    "text": str(w.get("text", "")),
+                    "start": float(w.get("start", w.get("start_time", 0.0))),
+                    "end": float(w.get("end", w.get("end_time", 0.0))),
+                }
+                for w in raw_words
+            ]
+        serialized.append(item)
     return serialized
 
 
@@ -187,7 +207,7 @@ def _load_segments_from_sidecar(path: Path) -> Optional[tuple[dict[str, str], li
     if not sidecar.exists():
         return None
 
-    from tachyon.session import TranscriptSegment
+    from tachyon.session import TranscriptSegment, WordTiming
 
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -207,11 +227,35 @@ def _load_segments_from_sidecar(path: Path) -> Optional[tuple[dict[str, str], li
             end = float(item.get("end", start))
             if end < start:
                 end = start
+
+            words: Optional[list[WordTiming]] = None
+            raw_words = item.get("words")
+            if isinstance(raw_words, list) and raw_words:
+                parsed_words: list[WordTiming] = []
+                for word_item in raw_words:
+                    if not isinstance(word_item, dict):
+                        continue
+                    word_text = str(word_item.get("text", ""))
+                    if not word_text:
+                        continue
+                    word_start = float(word_item.get("start", start))
+                    word_end = float(word_item.get("end", word_start))
+                    if word_end < word_start:
+                        word_end = word_start
+                    parsed_words.append(WordTiming(
+                        text=word_text,
+                        start_time=word_start,
+                        end_time=word_end,
+                    ))
+                if parsed_words:
+                    words = parsed_words
+
             segments.append(TranscriptSegment(
                 speaker=speaker,
                 text=text,
                 start_time=start,
                 end_time=end,
+                words=words,
             ))
 
         metadata: dict[str, str] = {}

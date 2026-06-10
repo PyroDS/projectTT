@@ -28,7 +28,7 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-from tachyon.session import TranscriptSegment
+from tachyon.session import TranscriptSegment, WordTiming
 from tachyon.exporter import (
     export_transcript_versioned,
     next_version_number,
@@ -442,11 +442,23 @@ class BatchTranscriber:
             if not text:
                 continue
 
+            word_timings: Optional[list[WordTiming]] = None
+            if segment.words:
+                word_timings = [
+                    WordTiming(
+                        text=word.word,
+                        start_time=word.start,
+                        end_time=word.end,
+                    )
+                    for word in segment.words
+                ]
+
             result.append(TranscriptSegment(
                 speaker=speaker,
                 text=text,
                 start_time=segment.start,
                 end_time=segment.end,
+                words=word_timings,
             ))
 
         return result

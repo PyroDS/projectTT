@@ -9,18 +9,18 @@
 | Project scaffolding | Done | Directory structure, requirements.txt, bat scripts |
 | `config.py` | Done | JSON config with defaults, load/save, pathlib, LoopbackDevice support |
 | `capture.py` | Done | WASAPI mic + multi-loopback, resampling, WAV writing, device_manifest.json |
-| `transcriber.py` | Done | faster-whisper CUDA, rolling buffer, word timestamps, dynamic speaker labels |
+| `transcriber.py` | Done | faster-whisper CUDA, rolling buffer, word timestamps preserved on segments + sidecar |
 | `hardware.py` | Done | NVML/torch hardware detection + auto model/device recommendation |
-| `session.py` | Done | Session lifecycle + thread-safe segment storage |
-| `exporter.py` | Done | Markdown transcript generation with Protocol types + versioned export + dynamic audio links |
-| `batch.py` | Done | Batch re-transcription with crosstalk suppression + dedup + multi-loopback WAV discovery |
+| `session.py` | Done | Session lifecycle + thread-safe segment storage + optional `WordTiming` metadata |
+| `exporter.py` | Done | Markdown transcript generation + JSON sidecar v2 with optional per-word timings |
+| `batch.py` | Done | Batch re-transcription with crosstalk suppression + dedup; preserves Whisper word timings |
 | `ui/wizard.py` | Done | First-run setup wizard + legal consent gate |
 | `ui/theme.py` | Done | Sci-fi dark theme: deep blue-teal palette, cyan accents, glow tokens, card states |
 | `ui/widgets.py` | Done | Custom widgets: HoverButton, GlowFrame, GradientBar, PulseIndicator, SessionCard |
 | `ui/reviewer.py` | Done | Sci-fi reviewer: gradient toolbar, session cards, two-line header, status bar, window icon |
 | `ui/tray.py` | Done | Navy/cyan icon with LANCZOS anti-aliasing, module-level create_app_icon() |
 | `ui/overlay.py` | Done | HUD edge line, PulseIndicator recording, cyan glow border, 15pt captions |
-| `diarizer.py` | Done | Speaker diarization: sliding window embeddings + clustering + timeline majority vote, multi-loopback WAV discovery |
+| `diarizer.py` | Done | Speaker diarization: sliding window embeddings + clustering + word-level timeline alignment/splitting, multi-loopback WAV discovery |
 | `main.py` | Done | Entry point, component wiring, lifecycle management |
 | `setup.bat` | Done | First-time venv + deps + model download |
 | `run.bat` | Done | pythonw launcher (no console) |
@@ -36,6 +36,22 @@ Per the implementation plan, the build order is:
 4. **Polish & Packaging** (Steps 8-10): Config + Main + Launchers
 
 ## Work Log
+
+### 2026-06-10 — Word-level diarization splitting
+
+**What was done:**
+- Added `WordTiming` and optional `words` field on `TranscriptSegment` in `session.py`.
+- Extended JSON sidecar schema to v2 with optional per-segment `words` arrays; v1 sidecars still load without word metadata.
+- `transcriber.py` and `batch.py` now preserve Whisper word timestamps on exported segments.
+- `diarizer.py` aligns each word to the speaker timeline and splits segments at speaker-change boundaries; segments without word metadata still use whole-segment majority voting.
+- Added tests in `tests/test_diarizer.py` and `tests/test_exporter.py`.
+
+**Decisions made:**
+- Keep markdown output unchanged — word timings live only in JSON sidecars for post-processing accuracy.
+- Re-transcribe before diarizing on older sessions so word metadata is available; otherwise diarization falls back to segment-level relabeling.
+
+**Issues encountered:**
+- Manual diarization with pyannote still mixed speakers when Whisper produced one long segment spanning a turn change; root cause was segment-level relabeling rather than clustering quality alone.
 
 ### 2026-05-11 — Rebuilt v0.1.3 installer from updated environment
 

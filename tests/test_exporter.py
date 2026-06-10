@@ -13,7 +13,7 @@ from tachyon.exporter import (
     next_version_number,
     save_edited_segments,
 )
-from tachyon.session import Session, TranscriptSegment
+from tachyon.session import Session, TranscriptSegment, WordTiming
 
 
 def test_format_timestamp_flooring() -> None:
@@ -107,7 +107,7 @@ def test_versioned_export_writes_json_sidecar(tmp_path: Path) -> None:
     assert sidecar.exists()
 
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["source"] == "batch"
     assert payload["version"] == "v2"
     assert payload["duration_sec"] == 9.5
@@ -156,6 +156,38 @@ def test_loader_prefers_json_sidecar_precision(tmp_path: Path) -> None:
     assert segments[0].text == "precise timing"
     assert segments[0].start_time == 0.321
     assert segments[0].end_time == 1.789
+
+
+def test_versioned_export_writes_word_metadata_to_sidecar(tmp_path: Path) -> None:
+    segments = [
+        TranscriptSegment(
+            "Them",
+            "hello there",
+            0.0,
+            1.0,
+            words=[
+                WordTiming("hello ", 0.0, 0.5),
+                WordTiming("there", 0.5, 1.0),
+            ],
+        ),
+    ]
+    md_path = export_transcript_versioned(
+        segments=segments,
+        session_dir=tmp_path,
+        duration=1.0,
+        start_datetime=datetime(2026, 4, 13, 12, 0, 0),
+        version=2,
+    )
+
+    payload = json.loads(md_path.with_suffix(".json").read_text(encoding="utf-8"))
+    assert payload["segments"][0]["words"][0]["text"] == "hello "
+    assert payload["segments"][0]["words"][1]["start"] == 0.5
+
+    _, loaded = load_transcript_from_markdown(md_path)
+    assert loaded[0].words is not None
+    assert len(loaded[0].words) == 2
+    assert loaded[0].words[1].text == "there"
+    assert loaded[0].words[1].start_time == 0.5
 
 
 def test_save_edited_segments_updates_sidecar(tmp_path: Path) -> None:
