@@ -1,7 +1,12 @@
-"""Speaker diarization engine for post-processing system audio.
+"""Speaker diarization engine for post-processing session audio.
 
-Splits "Them" segments into distinct speakers (Speaker 1, Speaker 2, etc.)
-using neural speaker embeddings and clustering of the system.wav file.
+Supports two source modes:
+
+- **system**: splits non-"You" / loopback segments using system WAV files.
+- **mixed**: splits all transcript segments using a single mixed audio file
+  (typically ``mic.wav``) when multiple speakers share one recording.
+
+**auto** picks system when enough non-"You" segments exist, otherwise mixed.
 
 Supports three switchable embedding backends:
   - **speechbrain** (default): ECAPA-TDNN 192-dim embeddings, 0.80% EER on VoxCeleb
@@ -36,10 +41,11 @@ from __future__ import annotations
 import json
 import logging
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 import soundfile as sf
@@ -49,13 +55,19 @@ from tachyon.config import PROJECT_ROOT
 from tachyon.session import TranscriptSegment
 from tachyon.exporter import load_transcript_from_markdown
 from tachyon.model_pins import (
+    HF_TOKEN_SETTINGS_URL,
     PYANNOTE_EMBEDDING_REPO,
     PYANNOTE_EMBEDDING_REVISION,
+    PYANNOTE_EMBEDDING_URL,
     SPEECHBRAIN_ECAPA_REPO,
     SPEECHBRAIN_ECAPA_REVISION,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PyannoteAccessError(RuntimeError):
+    """Raised when pyannote model load fails due to HF token or model terms."""
 
 # Absolute path for speechbrain model cache (survives cwd changes)
 _SPEECHBRAIN_SAVEDIR: str = str(PROJECT_ROOT / "models" / "speechbrain-ecapa")
@@ -89,6 +101,8 @@ class DiarizeConfig:
         num_speakers: Exact speaker count override (bypasses auto-detection).
         backend: Embedding backend — "speechbrain", "pyannote", or "resemblyzer".
         hf_token: HuggingFace token, required for pyannote backend only.
+        audio_mode: Audio source — "auto", "system", or "mixed".
+        audio_file: Optional WAV filename override within ``audio/`` for mixed mode.
     """
 
     min_speakers: Optional[int] = None
@@ -96,6 +110,8 @@ class DiarizeConfig:
     num_speakers: Optional[int] = None
     backend: str = "speechbrain"
     hf_token: str = ""
+    audio_mode: str = "auto"
+    audio_file: Optional[str] = None
 
 
 @dataclass
@@ -174,10 +190,10 @@ class Diarizer:
         source_transcript: str,
         stop_event: Optional[Any] = None,
     ) -> Optional[tuple[list[TranscriptSegment], list[SpeakerInfo]]]:
-        """Run speaker diarization on a session's system audio.
+        """Run speaker diarization on a session's audio and transcript.
 
-        Reads ``device_manifest.json`` if present to discover all loopback
-        WAV files.  Falls back to ``system.wav`` for old sessions.
+        Resolves audio from loopback WAVs (system mode) or ``mic.wav``
+        (mixed mode) based on :attr:`DiarizeConfig.audio_mode`.
 
         Parameters
         ----------
@@ -193,49 +209,71 @@ class Diarizer:
         -------
         Optional[tuple[list[TranscriptSegment], list[SpeakerInfo]]]
             Tuple of (relabeled_segments, speaker_info_list), or None
-            if cancelled or no system audio found.
+            if cancelled or no suitable audio found.
         """
-        # Discover loopback WAV files
-        loopback_wavs = self._discover_loopback_wavs(session_dir / "audio")
-        if not loopback_wavs:
-            logger.error("No loopback audio found in %s", session_dir)
-            return None
-
         transcript_path = session_dir / source_transcript
         if not transcript_path.exists():
             logger.error("Source transcript not found: %s", transcript_path)
             return None
 
-        # Step 1: Load audio from all loopback WAVs
-        self._report("Loading audio", 5)
+        audio_dir = session_dir / "audio"
+
+        # Step 1: Load source transcript segments
+        self._report("Loading transcript", 5)
+        _, source_segments = load_transcript_from_markdown(transcript_path)
+        if not source_segments:
+            logger.error("Source transcript has no segments: %s", transcript_path)
+            return None
+
+        resolved = self._resolve_audio_sources(audio_dir, source_segments)
+        if resolved is None:
+            logger.error("No suitable audio found for diarization in %s", session_dir)
+            return None
+
+        audio_sources, effective_mode = resolved
+        preserve_you = effective_mode == "system"
+        logger.info(
+            "Diarization audio mode: requested=%s, effective=%s, files=%d",
+            self._config.audio_mode, effective_mode, len(audio_sources),
+        )
+
+        # Step 2: Load audio from resolved WAV file(s)
+        self._report("Loading audio", 10)
         audio_parts: list[np.ndarray] = []
         audio_duration_sec = 0.0
-        for wav_path, _label in loopback_wavs:
+        for wav_path, _label in audio_sources:
             part = self._load_audio(wav_path)
             if part is not None and part.size > 0:
                 audio_parts.append(part)
                 audio_duration_sec = max(audio_duration_sec, len(part) / TARGET_SAMPLERATE)
 
         if not audio_parts:
-            logger.error("Failed to load any loopback audio")
+            logger.error("Failed to load any diarization audio")
             return None
 
         if self._cancelled(stop_event):
             return None
 
-        # Step 2: Load source transcript segments and fix end_times
-        self._report("Loading transcript", 10)
-        _, source_segments = load_transcript_from_markdown(transcript_path)
-
-        # Markdown parser sets end_time = start_time for all segments.
         # Estimate end_time as the next segment's start_time (or audio end).
         source_segments = self._estimate_end_times(source_segments, audio_duration_sec)
 
         them_segments = [s for s in source_segments if s.speaker != "You"]
-        logger.info("Loaded %d segments (%d non-You)", len(source_segments), len(them_segments))
+        logger.info(
+            "Loaded %d segments (%d non-You), mode=%s",
+            len(source_segments), len(them_segments), effective_mode,
+        )
 
-        if len(them_segments) < 2:
-            logger.warning("Not enough 'Them' segments for clustering (%d)", len(them_segments))
+        if effective_mode == "system":
+            if len(them_segments) < 2:
+                logger.warning(
+                    "Not enough 'Them' segments for clustering (%d)", len(them_segments),
+                )
+                return None
+        elif len(source_segments) < 2:
+            logger.warning(
+                "Not enough transcript segments for mixed diarization (%d)",
+                len(source_segments),
+            )
             return None
 
         if self._cancelled(stop_event):
@@ -245,6 +283,8 @@ class Diarizer:
         self._report("Loading speaker encoder", 20)
         try:
             self._get_encoder()
+        except PyannoteAccessError:
+            raise
         except Exception as exc:
             logger.error("Failed to load %s encoder: %s", self._config.backend, exc)
             self._report("Error", 0, f"Encoder load failed: {exc}")
@@ -266,7 +306,7 @@ class Diarizer:
             features = np.array([])
 
         logger.info(
-            "Extracted %d window embeddings (%d dims) from %d loopback file(s), %.1fs max duration",
+            "Extracted %d window embeddings (%d dims) from %d audio file(s), %.1fs max duration",
             len(features),
             features.shape[1] if len(features) > 0 else 0,
             len(audio_parts),
@@ -317,6 +357,7 @@ class Diarizer:
             timeline,
             labels,
             resolution_sec=timeline_resolution_sec,
+            preserve_you=preserve_you,
         )
 
         if self._cancelled(stop_event):
@@ -374,12 +415,79 @@ class Diarizer:
 
         return []
 
+    @staticmethod
+    def _discover_mic_wav(
+        audio_dir: Path,
+        audio_file: Optional[str] = None,
+    ) -> Optional[Path]:
+        """Discover the mic / mixed WAV file from manifest or fallback."""
+        if audio_file:
+            path = audio_dir / audio_file
+            return path if path.exists() else None
+
+        manifest_path = audio_dir / "device_manifest.json"
+        if manifest_path.exists():
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                mic_file = data.get("mic", {}).get("file")
+                if mic_file:
+                    path = audio_dir / mic_file
+                    if path.exists():
+                        return path
+            except Exception:
+                pass
+
+        mic_wav = audio_dir / "mic.wav"
+        return mic_wav if mic_wav.exists() else None
+
+    def _resolve_audio_sources(
+        self,
+        audio_dir: Path,
+        source_segments: list[TranscriptSegment],
+    ) -> Optional[tuple[list[tuple[Path, str]], str]]:
+        """Resolve WAV files and effective mode from config and transcript.
+
+        Returns
+        -------
+        Optional[tuple[list[tuple[Path, str]], str]]
+            ``(wav_list, effective_mode)`` where *effective_mode* is
+            ``"system"`` or ``"mixed"``, or ``None`` if no audio found.
+        """
+        mode = (self._config.audio_mode or "auto").strip().lower()
+        them_segments = [s for s in source_segments if s.speaker != "You"]
+        loopbacks = self._discover_loopback_wavs(audio_dir)
+        mic_path = self._discover_mic_wav(audio_dir, self._config.audio_file)
+
+        if mode == "system":
+            if not loopbacks:
+                return None
+            return loopbacks, "system"
+
+        if mode == "mixed":
+            if mic_path is None:
+                return None
+            return [(mic_path, "mic")], "mixed"
+
+        if mode == "auto":
+            if loopbacks and len(them_segments) >= 2:
+                return loopbacks, "system"
+            if mic_path is not None and len(source_segments) >= 2:
+                return [(mic_path, "mic")], "mixed"
+            if loopbacks:
+                return loopbacks, "system"
+            if mic_path is not None:
+                return [(mic_path, "mic")], "mixed"
+            return None
+
+        logger.error("Unknown audio_mode: %s", self._config.audio_mode)
+        return None
+
     # ------------------------------------------------------------------
     # Step 1: Load & preprocess audio
     # ------------------------------------------------------------------
 
     def _load_audio(self, path: Path) -> Optional[np.ndarray]:
-        """Load system.wav, resample to 16kHz mono, RMS-normalize."""
+        """Load a WAV file, resample to 16kHz mono, RMS-normalize."""
         try:
             audio, sr = sf.read(str(path), dtype="float32")
         except Exception:
@@ -402,7 +510,8 @@ class Diarizer:
             audio = np.clip(audio * scale, -1.0, 1.0).astype(np.float32)
 
         logger.info(
-            "Loaded system audio: %.1fs, %d samples",
+            "Loaded diarization audio (%s): %.1fs, %d samples",
+            path.name,
             len(audio) / TARGET_SAMPLERATE, len(audio),
         )
         return audio
@@ -744,12 +853,15 @@ class Diarizer:
         timeline: dict[int, int],
         labels: np.ndarray,
         resolution_sec: float = 0.25,
+        preserve_you: bool = True,
     ) -> list[TranscriptSegment]:
         """Assign speaker labels to segments using the per-second timeline.
 
-        For each non-"You" segment, looks up its time range in the
-        timeline and assigns the speaker with the most seconds covered.
-        "You" segments pass through unchanged.
+        For each segment, looks up its time range in the timeline and
+        assigns the speaker with the most seconds covered.  When
+        *preserve_you* is True (system mode), ``"You"`` segments pass
+        through unchanged.  When False (mixed mode), all segments are
+        relabeled.
 
         Parameters
         ----------
@@ -759,6 +871,8 @@ class Diarizer:
             Per-second speaker mapping from _build_speaker_timeline().
         labels:
             Raw cluster labels (used to build cluster → speaker number mapping).
+        preserve_you:
+            If True, keep ``"You"`` segments unchanged.
         """
         # Build mapping: cluster label → speaker number (by first appearance in labels)
         first_appearance: dict[int, int] = {}
@@ -775,7 +889,7 @@ class Diarizer:
         # Relabel segments
         relabeled: list[TranscriptSegment] = []
         for seg in all_segments:
-            if seg.speaker == "You":
+            if preserve_you and seg.speaker == "You":
                 relabeled.append(seg)
                 continue
 
@@ -1038,25 +1152,99 @@ def _load_speechbrain_pinned(encoder_cls: Any, savedir: str) -> Any:
         return encoder_cls.from_hparams(**common_kwargs)
 
 
+def _pyannote_access_message() -> str:
+    """Return user-facing guidance for pyannote HF token/model-terms failures."""
+    return (
+        "Pyannote model access failed. Accept model terms at "
+        f"{PYANNOTE_EMBEDDING_URL}, verify your HuggingFace token at "
+        f"{HF_TOKEN_SETTINGS_URL}, or switch to SpeechBrain."
+    )
+
+
+def _is_pyannote_access_error(exc: Exception) -> bool:
+    """Return True when an exception likely indicates HF access/terms issues."""
+    msg = str(exc).lower()
+    markers = (
+        "private or gated",
+        "gated",
+        "unauthorized",
+        "authentication",
+        "access token",
+        "permission",
+        "credentials",
+        "user conditions",
+        "token",
+        "401",
+        "403",
+        "cannot find an appropriate cached snapshot",
+        "repository not found",
+    )
+    return any(marker in msg for marker in markers)
+
+
+@contextmanager
+def _torch_load_legacy_pickle_for_pinned_pyannote() -> Iterator[None]:
+    """Temporarily allow legacy pickle checkpoint loading for pinned pyannote.
+
+    PyTorch 2.6 changed ``torch.load`` to default to ``weights_only=True``.
+    The pinned pyannote embedding checkpoint is an older Lightning checkpoint
+    that stores callback/OmegaConf metadata and cannot load in weights-only
+    mode. This is intentionally scoped to the pinned pyannote load call because
+    legacy pickle loading is a code-execution boundary.
+    """
+    import torch
+
+    original_load = torch.load
+
+    def _load_with_legacy_pickle(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("weights_only") is None:
+            kwargs["weights_only"] = False
+        return original_load(*args, **kwargs)
+
+    torch.load = _load_with_legacy_pickle
+    try:
+        yield
+    finally:
+        torch.load = original_load
+
+
 def _load_pyannote_pinned(model_cls: Any, hf_token: str) -> Any:
     """Load the pyannote embedding model pinned to a known commit.
 
-    Falls back to unpinned load with a warning if the installed
-    pyannote build does not accept ``revision``.
+    pyannote.audio 3.x expects Hugging Face auth as ``use_auth_token``
+    and reads revisions from the ``repo@revision`` checkpoint string.
+    Passing ``token=...`` is silently ignored because the loader accepts
+    extra model-constructor kwargs.
     """
+    checkpoint = f"{PYANNOTE_EMBEDDING_REPO}@{PYANNOTE_EMBEDDING_REVISION}"
     try:
-        return model_cls.from_pretrained(
-            PYANNOTE_EMBEDDING_REPO,
-            token=hf_token,
-            revision=PYANNOTE_EMBEDDING_REVISION,
-        )
+        with _torch_load_legacy_pickle_for_pinned_pyannote():
+            model = model_cls.from_pretrained(
+                checkpoint,
+                use_auth_token=hf_token,
+            )
     except TypeError:
         logger.warning(
-            "pyannote.Model.from_pretrained does not accept 'revision' -- "
-            "loading %s UNPINNED.  Upgrade pyannote.audio to restore "
-            "supply-chain pinning.",
+            "pyannote.Model.from_pretrained does not accept 'use_auth_token' -- "
+            "retrying %s with token=... for compatibility.",
             PYANNOTE_EMBEDDING_REPO,
         )
-        return model_cls.from_pretrained(
-            PYANNOTE_EMBEDDING_REPO, token=hf_token,
-        )
+        try:
+            with _torch_load_legacy_pickle_for_pinned_pyannote():
+                model = model_cls.from_pretrained(
+                    checkpoint,
+                    token=hf_token,
+                )
+        except Exception as exc:
+            if _is_pyannote_access_error(exc):
+                raise PyannoteAccessError(_pyannote_access_message()) from exc
+            raise
+    except Exception as exc:
+        if _is_pyannote_access_error(exc):
+            raise PyannoteAccessError(_pyannote_access_message()) from exc
+        raise
+
+    if model is None:
+        raise PyannoteAccessError(_pyannote_access_message())
+
+    return model

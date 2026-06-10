@@ -203,18 +203,22 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Cancellable via `threading.Event`
 
 ### `diarizer.py` — Speaker Diarization Engine
-- **Owns**: Post-processing speaker identification for system audio
-- **Inputs**: Session directory with loopback WAV(s) (via `device_manifest.json` or `system.wav`) and a source transcript (JSON sidecar preferred, markdown fallback)
+- **Owns**: Post-processing speaker identification for session audio
+- **Inputs**: Session directory with loopback WAV(s) and/or `mic.wav` (via `device_manifest.json` or fallbacks) and a source transcript (JSON sidecar preferred, markdown fallback)
 - **Outputs**: Relabeled `TranscriptSegment` list with "Speaker N" labels, `SpeakerInfo` profiles, diarized markdown export, `speaker_map.json`
 - **Key details**:
+  - Three audio source modes (reviewer toolbar **Source** dropdown):
+    - **system**: uses loopback WAV(s), preserves "You" segments, relabels non-"You" only
+    - **mixed**: uses `mic.wav` (or configured override), relabels all transcript segments — for single-file recordings with multiple speakers
+    - **auto**: uses system when ≥2 non-"You" segments exist, otherwise falls back to mixed when `mic.wav` is available
   - Three switchable embedding backends (user selects from reviewer UI dropdown):
     - **speechbrain** (default): ECAPA-TDNN, 192-dim embeddings, 0.80% EER on VoxCeleb, auto-downloads from HuggingFace public hub, no token needed
-    - **pyannote** (optional): ~512-dim embeddings, 2.8% EER, requires `pip install pyannote.audio` + HuggingFace account + token + model terms acceptance
+    - **pyannote** (optional): ~512-dim embeddings, 2.8% EER, requires `pip install pyannote.audio` + HuggingFace account + token + model terms acceptance; reviewer provides in-app links to accept terms and manage tokens
     - **resemblyzer** (lightweight fallback): 256-dim GE2E embeddings, older 2018 model, already bundled
-  - All three backends run on CPU — no GPU needed, no conflict with Whisper VRAM
-  - Sliding window embedding extraction: 3s windows with 1.5s hop across each discovered loopback WAV
+  - All processing is local — embeddings and clustering run on CPU; Hugging Face is only used to download/cache model weights
+  - Sliding window embedding extraction: 3s windows with 1.5s hop across resolved audio file(s)
   - Clustering via `scikit-learn`: Agglomerative (ward linkage) with max-silhouette auto speaker count (2-8)
-  - Multi-loopback aggregation: embeddings from all loopback WAVs are clustered together
+  - Multi-loopback aggregation: embeddings from all loopback WAVs are clustered together in system mode
   - 250ms speaker timeline built from window labels via majority vote
   - Transcript segments relabeled from timeline using exact segment `start`/`end` timing from sidecar data
   - Optional fixed speaker-count hint (`num_speakers`) can be supplied from reviewer UI
@@ -233,7 +237,9 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Right panel: transcript viewer with multi-speaker coloring (8-color palette by order of appearance)
   - Inline speaker panel: shown between header and transcript after diarization — per-speaker rows with color dot, name entry, duration, sample text. Also accessible via "Edit Speakers" link on diarized versions.
   - Version dropdown: switch between original, batch, and diarized versions
-  - Top toolbar: re-transcribe/diarize/edit controls, progress, backend + speaker-count + HF token controls, open-folder
+  - Top toolbar: re-transcribe/diarize/edit controls, progress, backend + speaker-count + pyannote setup controls (`Accept Terms`, `HF Token`), open-folder
+  - When backend is `pyannote`, reviewer exposes one-click browser links to the pinned Hugging Face model page and token settings for setup only; audio/transcript processing remains local
+  - Pyannote model-access failures surface a recovery dialog (`Open Model Page`, `Edit Token`, `Use SpeechBrain`) instead of a generic audio-missing error
   - Context tutorial overlay: dynamic multi-step walkthrough shown when Review opens (default), implemented as a single floating tutorial card plus an in-reviewer high-contrast target border highlight (no extra transparent overlay windows), with step-aware card placement and live sync while the reviewer window moves/resizes. Persisted "show on open" preference and toolbar Help button reopen it on demand
   - Bottom status bar: session count + shortcut hints
   - Session discovery via regex matching `YYYY-MM-DD_HHMMSS` folder names

@@ -43,3 +43,17 @@ def test_discover_sessions_fallback_system_wav(tmp_path: Path) -> None:
     assert len(sessions) == 1
     assert sessions[0].loopback_files == [{"file": "system.wav"}]
 
+
+def test_discover_sessions_mic_only_session(tmp_path: Path) -> None:
+    session_dir = tmp_path / "2026-04-12_122000"
+    audio_dir = session_dir / "audio"
+    audio_dir.mkdir(parents=True)
+
+    (audio_dir / "mic.wav").write_bytes(b"")
+    (session_dir / "transcript.md").write_text("# Meeting Transcript\n", encoding="utf-8")
+
+    sessions = discover_sessions(tmp_path)
+    assert len(sessions) == 1
+    assert sessions[0].has_mic_wav is True
+    assert sessions[0].loopback_files == []
+

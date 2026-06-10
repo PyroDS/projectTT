@@ -2,10 +2,26 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
-from tachyon.diarizer import Diarizer
+from tachyon.diarizer import (
+    DiarizeConfig,
+    Diarizer,
+    PyannoteAccessError,
+    _is_pyannote_access_error,
+    _load_pyannote_pinned,
+    _pyannote_access_message,
+    _torch_load_legacy_pickle_for_pinned_pyannote,
+)
+from tachyon.model_pins import (
+    HF_TOKEN_SETTINGS_URL,
+    PYANNOTE_EMBEDDING_REPO,
+    PYANNOTE_EMBEDDING_REVISION,
+    PYANNOTE_EMBEDDING_URL,
+)
 from tachyon.session import TranscriptSegment
 
 
@@ -34,6 +50,79 @@ def test_discover_loopback_wavs_from_manifest(tmp_path: Path) -> None:
     ]
 
 
+def test_discover_mic_wav_from_manifest(tmp_path: Path) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "mic.wav").write_bytes(b"")
+
+    (audio_dir / "device_manifest.json").write_text(
+        json.dumps({"mic": {"file": "mic.wav"}}),
+        encoding="utf-8",
+    )
+
+    mic = Diarizer._discover_mic_wav(audio_dir)
+    assert mic == audio_dir / "mic.wav"
+
+
+def test_resolve_audio_sources_auto_prefers_mixed_when_few_them_segments(
+    tmp_path: Path,
+) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "mic.wav").write_bytes(b"")
+    (audio_dir / "system.wav").write_bytes(b"")
+
+    diarizer = Diarizer(config=DiarizeConfig(audio_mode="auto"))
+    segments = [
+        TranscriptSegment("You", "hello", 0.0, 1.0),
+        TranscriptSegment("You", "world", 1.0, 2.0),
+        TranscriptSegment("Them", "thanks", 2.0, 3.0),
+    ]
+
+    resolved = diarizer._resolve_audio_sources(audio_dir, segments)
+    assert resolved is not None
+    wavs, mode = resolved
+    assert mode == "mixed"
+    assert wavs == [(audio_dir / "mic.wav", "mic")]
+
+
+def test_resolve_audio_sources_auto_uses_system_when_enough_them_segments(
+    tmp_path: Path,
+) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "mic.wav").write_bytes(b"")
+    (audio_dir / "system.wav").write_bytes(b"")
+
+    diarizer = Diarizer(config=DiarizeConfig(audio_mode="auto"))
+    segments = [
+        TranscriptSegment("You", "hello", 0.0, 1.0),
+        TranscriptSegment("Them", "one", 1.0, 2.0),
+        TranscriptSegment("Them", "two", 2.0, 3.0),
+    ]
+
+    resolved = diarizer._resolve_audio_sources(audio_dir, segments)
+    assert resolved is not None
+    wavs, mode = resolved
+    assert mode == "system"
+    assert wavs == [(audio_dir / "system.wav", "")]
+
+
+def test_resolve_audio_sources_mixed_mode(tmp_path: Path) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "mic.wav").write_bytes(b"")
+
+    diarizer = Diarizer(config=DiarizeConfig(audio_mode="mixed"))
+    segments = [TranscriptSegment("You", "only speaker label", 0.0, 1.0)]
+
+    resolved = diarizer._resolve_audio_sources(audio_dir, segments)
+    assert resolved is not None
+    wavs, mode = resolved
+    assert mode == "mixed"
+    assert wavs == [(audio_dir / "mic.wav", "mic")]
+
+
 def test_build_speaker_timeline_uses_subsecond_resolution() -> None:
     timeline = Diarizer._build_speaker_timeline(
         window_centers=[0.5, 1.5],
@@ -46,14 +135,13 @@ def test_build_speaker_timeline_uses_subsecond_resolution() -> None:
     assert timeline[4] == 1  # 4 * 0.25s = 1.0s
 
 
-def test_relabel_from_timeline_uses_bin_votes() -> None:
+def test_relabel_from_timeline_system_mode_preserves_you() -> None:
     diarizer = Diarizer()
     segments = [
         TranscriptSegment("Them", "first", 0.0, 0.5),
         TranscriptSegment("You", "me", 0.5, 0.75),
         TranscriptSegment("Them", "second", 0.75, 1.25),
     ]
-    # timeline bins at 0.25s: 0-2 -> cluster 10, 3-5 -> cluster 20
     timeline = {
         0: 10, 1: 10, 2: 10,
         3: 20, 4: 20, 5: 20,
@@ -65,8 +153,108 @@ def test_relabel_from_timeline_uses_bin_votes() -> None:
         timeline,
         labels,
         resolution_sec=0.25,
+        preserve_you=True,
     )
 
     assert relabeled[0].speaker == "Speaker 1"
     assert relabeled[1].speaker == "You"
     assert relabeled[2].speaker == "Speaker 2"
+
+
+def test_relabel_from_timeline_mixed_mode_relabels_you() -> None:
+    diarizer = Diarizer()
+    segments = [
+        TranscriptSegment("You", "first", 0.0, 0.5),
+        TranscriptSegment("You", "second", 0.75, 1.25),
+    ]
+    timeline = {
+        0: 10, 1: 10, 2: 10,
+        3: 20, 4: 20, 5: 20,
+    }
+    labels = np.array([10, 20], dtype=np.int32)
+
+    relabeled = diarizer._relabel_from_timeline(
+        segments,
+        timeline,
+        labels,
+        resolution_sec=0.25,
+        preserve_you=False,
+    )
+
+    assert relabeled[0].speaker == "Speaker 1"
+    assert relabeled[1].speaker == "Speaker 2"
+
+
+def test_pyannote_access_message_includes_hf_urls() -> None:
+    message = _pyannote_access_message()
+    assert PYANNOTE_EMBEDDING_URL in message
+    assert HF_TOKEN_SETTINGS_URL in message
+
+
+@pytest.mark.parametrize(
+    "error_text",
+    [
+        "You are trying to access a gated repo",
+        "401 Client Error: Unauthorized",
+        "Invalid user token",
+    ],
+)
+def test_is_pyannote_access_error_detects_hf_access_failures(error_text: str) -> None:
+    assert _is_pyannote_access_error(RuntimeError(error_text)) is True
+
+
+def test_is_pyannote_access_error_ignores_unrelated_failures() -> None:
+    assert _is_pyannote_access_error(RuntimeError("CUDA out of memory")) is False
+
+
+def test_is_pyannote_access_error_ignores_torch_weights_only_error() -> None:
+    message = (
+        "Weights only load failed. Check the documentation of torch.load "
+        "to learn more about types accepted by default."
+    )
+    assert _is_pyannote_access_error(RuntimeError(message)) is False
+
+
+def test_torch_load_legacy_context_overrides_none_weights_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    calls: list[dict] = []
+
+    def fake_torch_load(*_args: object, **kwargs: object) -> object:
+        calls.append(dict(kwargs))
+        return object()
+
+    monkeypatch.setattr(torch, "load", fake_torch_load)
+
+    with _torch_load_legacy_pickle_for_pinned_pyannote():
+        torch.load("checkpoint.bin", weights_only=None)
+
+    assert calls == [{"weights_only": False}]
+
+
+def test_load_pyannote_pinned_raises_when_model_is_none() -> None:
+    model_cls = MagicMock()
+    model_cls.from_pretrained.return_value = None
+
+    with pytest.raises(PyannoteAccessError, match="Pyannote model access failed"):
+        _load_pyannote_pinned(model_cls, "hf_test_token")
+
+    model_cls.from_pretrained.assert_called_once_with(
+        f"{PYANNOTE_EMBEDDING_REPO}@{PYANNOTE_EMBEDDING_REVISION}",
+        use_auth_token="hf_test_token",
+    )
+
+
+def test_load_pyannote_pinned_raises_on_access_exception() -> None:
+    model_cls = MagicMock()
+    model_cls.from_pretrained.side_effect = RuntimeError(
+        "401 Client Error: Unauthorized for url"
+    )
+
+    with pytest.raises(PyannoteAccessError, match=PYANNOTE_EMBEDDING_URL):
+        _load_pyannote_pinned(model_cls, "hf_test_token")
+
+    model_cls.from_pretrained.assert_called_once_with(
+        f"{PYANNOTE_EMBEDDING_REPO}@{PYANNOTE_EMBEDDING_REVISION}",
+        use_auth_token="hf_test_token",
+    )

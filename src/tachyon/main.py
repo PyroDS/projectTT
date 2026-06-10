@@ -140,6 +140,7 @@ from tachyon.diarizer import (
     Diarizer,
     DiarizeConfig,
     DiarizeProgress,
+    PyannoteAccessError,
     SpeakerInfo,
     save_speaker_map,
     update_speaker_names,
@@ -1072,6 +1073,7 @@ class App:
     def _on_diarize(
         self, session_dir: Path, source_transcript: str,
         backend: str, hf_token: str, num_speakers: Optional[int],
+        audio_mode: str = "auto",
     ) -> None:
         """Start speaker diarization in a daemon thread."""
         if self._recording:
@@ -1091,8 +1093,8 @@ class App:
         self._config.save()
 
         logger.info(
-            "Starting diarization for %s (source: %s, backend: %s)",
-            session_dir, source_transcript, backend,
+            "Starting diarization for %s (source: %s, backend: %s, audio_mode: %s)",
+            session_dir, source_transcript, backend, audio_mode,
         )
 
         self._diarize_stop_event.clear()
@@ -1108,6 +1110,7 @@ class App:
             backend=backend,
             hf_token=hf_token,
             num_speakers=num_speakers,
+            audio_mode=audio_mode,
         )
         diarizer = Diarizer(config=config, on_progress=self._on_diarize_progress)
 
@@ -1180,9 +1183,22 @@ class App:
                         self._overlay._root.after(
                             0,
                             self._reviewer.show_error,
-                            "Speaker identification failed. The loopback "
-                            "audio may be missing, silent, or too short.",
+                            "Speaker identification failed. Audio may be "
+                            "missing, silent, or too short — try Source: "
+                            "Mixed for single-file recordings.",
                         )
+        except PyannoteAccessError:
+            logger.error("Pyannote model access failed during diarization")
+            self._overlay._root.after(0, self._on_diarize_finished)
+            self._overlay._root.after(0, lambda: self._tray.notify(
+                "Tachyon Transcripts",
+                "Pyannote model access failed. Open Hugging Face to accept "
+                "model terms or verify your token.",
+            ))
+            if self._reviewer is not None:
+                self._overlay._root.after(
+                    0, self._reviewer.show_pyannote_access_failure,
+                )
         except Exception as exc:
             logger.exception("Diarization failed")
             self._overlay._root.after(0, self._on_diarize_finished)

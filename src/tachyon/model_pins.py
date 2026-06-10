@@ -59,3 +59,5 @@ SPEECHBRAIN_ECAPA_REVISION: str = "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
 # pyannote embedding -- optional backend, requires HF token.
 PYANNOTE_EMBEDDING_REPO: str     = "pyannote/embedding"
 PYANNOTE_EMBEDDING_REVISION: str = "4db4899737a38b2d618bbd74350915aa10293cb2"
+PYANNOTE_EMBEDDING_URL: str      = "https://huggingface.co/pyannote/embedding"
+HF_TOKEN_SETTINGS_URL: str       = "https://huggingface.co/settings/tokens"

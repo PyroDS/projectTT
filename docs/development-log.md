@@ -1420,3 +1420,78 @@ Five merged capabilities (Tasks #1–#5 of the shareable-release plan):
 
 **Issues encountered:**
 - None.
+
+### 2026-06-10 — Mixed single-file diarization
+
+**What was done:**
+- Added three diarization audio source modes to `diarizer.py`: `auto`, `system`, and `mixed`.
+- **system** mode preserves existing behavior: loopback WAV discovery, preserve `"You"` segments, relabel non-`"You"` only.
+- **mixed** mode uses `mic.wav` (or manifest override) and relabels all transcript segments — fixes mic-only recordings where multiple speakers share one file but batch labels everything `"You"`.
+- **auto** mode picks system when ≥2 non-`"You"` segments exist, otherwise falls back to mixed when `mic.wav` is available.
+- Extended `DiarizeConfig` with `audio_mode` and optional `audio_file`.
+- Reviewer toolbar: new **Source** dropdown (`Auto` / `System` / `Mixed`); `Identify Speakers` now enabled for mic-only sessions.
+- `main.py`: passes `audio_mode` into `DiarizeConfig`; improved failure message for single-file recordings.
+
+**Decisions made:**
+- Reused the existing local embedding + clustering pipeline rather than adding pyannote's full diarization pipeline — same CPU-only path, no new VRAM conflict with Whisper.
+- Auto fallback triggers when loopback exists but transcript has <2 `"Them"` segments (common when both voices are in `mic.wav`).
+
+**Verification:**
+- `python -m pytest tests/test_diarizer.py tests/test_reviewer_discovery.py`
+
+**Issues encountered:**
+- None.
+
+### 2026-06-10 — Pyannote Hugging Face setup UX
+
+**What was done:**
+- Added pinned Hugging Face URLs in `model_pins.py` for the pyannote embedding model page and token settings page.
+- Reviewer toolbar now shows pyannote-only `Accept Terms` beside `HF Token`; token dialog adds `Accept Model Terms` and `Create Token` browser actions via `webbrowser.open(...)`.
+- `diarizer.py` now raises `PyannoteAccessError` when pyannote model load fails due to missing terms/token/access, including the `from_pretrained(...)` `None` return case.
+- `main.py` surfaces pyannote access failures with a reviewer recovery dialog (`Open Model Page`, `Edit Token`, `Use SpeechBrain`) instead of the generic missing-audio message.
+
+**Decisions made:**
+- Browser opening is setup-only; embeddings, clustering, and session audio stay local.
+- Reused existing pyannote-only toolbar visibility logic so non-pyannote backends stay compact.
+
+**Verification:**
+- `python -m pytest tests/test_diarizer.py tests/test_reviewer_discovery.py`
+- `ReadLints` on edited Python files
+
+**Issues encountered:**
+- None.
+
+### 2026-06-10 — Pyannote token argument compatibility fix
+
+**What was done:**
+- Fixed pyannote model loading to pass the Hugging Face token as `use_auth_token`, matching the installed `pyannote.audio` 3.x loader.
+- Switched pyannote revision pinning to the `repo@revision` checkpoint format because this loader reads the revision from the checkpoint string, not a `revision=` keyword.
+- Tightened diarizer tests to assert the exact `Model.from_pretrained(...)` arguments so token-parameter drift is caught.
+
+**Decisions made:**
+- Kept a compatibility retry with `token=...` for future loader variants, but the primary path now matches the pinned `pyannote.audio==3.4.0` install path.
+
+**Verification:**
+- `python -m pytest tests/test_diarizer.py tests/test_reviewer_discovery.py`
+- `ReadLints` on edited Python files
+
+**Issues encountered:**
+- The previous `token=` call was silently ignored because pyannote 3.x accepts arbitrary model-constructor kwargs; it did not raise a `TypeError`.
+
+### 2026-06-10 — Pyannote PyTorch 2.6 checkpoint compatibility fix
+
+**What was done:**
+- Fixed a second pyannote load failure after Hugging Face authentication succeeded: PyTorch 2.6+ defaults `torch.load` to `weights_only=True`, but the pinned `pyannote/embedding` checkpoint is an older Lightning checkpoint containing callback/OmegaConf metadata.
+- Added a scoped `torch.load` compatibility context used only while loading the pinned pyannote checkpoint, setting `weights_only=False` when Lightning passes `None`.
+- Tightened pyannote access-error classification so unrelated PyTorch messages containing words like "accepted" are not mislabeled as Hugging Face token/model-terms failures.
+- Added tests for the scoped `torch.load` override and the classifier false-positive case.
+
+**Decisions made:**
+- Kept the legacy pickle load narrowly scoped to the pinned pyannote checkpoint. This preserves the existing supply-chain boundary: only the explicitly pinned model revision gets this compatibility path.
+
+**Verification:**
+- `python -m pytest tests/test_diarizer.py tests/test_reviewer_discovery.py`
+- `ReadLints` on edited Python files
+
+**Issues encountered:**
+- Hugging Face access was working; the model weights and config downloaded successfully. The actual failure was local checkpoint deserialization under newer PyTorch.

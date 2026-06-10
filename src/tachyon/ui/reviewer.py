@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ from tachyon.exporter import (
 from tachyon.session import TranscriptSegment
 from tachyon.batch import BatchProgress
 from tachyon.diarizer import DiarizeProgress, SpeakerInfo, SPEAKER_COLORS, load_speaker_map
+from tachyon.model_pins import HF_TOKEN_SETTINGS_URL, PYANNOTE_EMBEDDING_URL
 from tachyon.ui.theme import Color, Font, Dim, ToolTip
 from tachyon.ui.widgets import HoverButton, GradientBar, SessionCard
 
@@ -116,6 +118,12 @@ _TOUR_CARD_W = 680
 _TOUR_CARD_H = 420
 _TOUR_PADDING = 14
 _BACKEND_OPTIONS = ("speechbrain", "pyannote", "resemblyzer")
+_AUDIO_MODE_OPTIONS = ("Auto", "System", "Mixed")
+_AUDIO_MODE_VALUES: dict[str, str] = {
+    "Auto": "auto",
+    "System": "system",
+    "Mixed": "mixed",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +277,9 @@ class TranscriptReviewer:
         output_dir: Path,
         on_retranscribe: Callable[[Path], None],
         on_cancel_retranscribe: Callable[[], None],
-        on_diarize: Optional[Callable[[Path, str, str, str, Optional[int]], None]] = None,
+        on_diarize: Optional[
+            Callable[[Path, str, str, str, Optional[int], str], None]
+        ] = None,
         on_cancel_diarize: Optional[Callable[[], None]] = None,
         on_save_speaker_names: Optional[Callable[[Path, dict[str, str]], None]] = None,
         on_hf_token_changed: Optional[Callable[[str], None]] = None,
@@ -955,6 +965,23 @@ class TranscriptReviewer:
             fg=Color.fg_secondary, bg=Color.bg_elevated,
         ).pack(side=tk.RIGHT, padx=(6, 0), pady=7)
 
+        self._audio_mode_var = tk.StringVar(value="Auto")
+        self._audio_mode_dropdown = ttk.Combobox(
+            config_frame,
+            textvariable=self._audio_mode_var,
+            state="readonly",
+            values=list(_AUDIO_MODE_OPTIONS),
+            width=7,
+            font=(Font.family, Font.size_tiny),
+        )
+        self._audio_mode_dropdown.pack(side=tk.RIGHT, padx=(6, 0), pady=7)
+
+        tk.Label(
+            config_frame, text="Source:",
+            font=(Font.family, Font.size_tiny),
+            fg=Color.fg_secondary, bg=Color.bg_elevated,
+        ).pack(side=tk.RIGHT, padx=(6, 0), pady=7)
+
         self._speaker_count_var = tk.StringVar(value="Auto")
         self._speaker_count_dropdown = ttk.Combobox(
             config_frame,
@@ -972,7 +999,20 @@ class TranscriptReviewer:
             fg=Color.fg_secondary, bg=Color.bg_elevated,
         ).pack(side=tk.RIGHT, padx=(6, 0), pady=7)
 
-        # HF Token management button (only visible when pyannote is selected)
+        # Pyannote setup buttons (only visible when pyannote is selected)
+        self._accept_terms_btn = tk.Button(
+            config_frame,
+            text="Accept Terms",
+            font=(Font.family, Font.size_tiny),
+            fg=Color.fg_primary,
+            bg=Color.btn_neutral,
+            activebackground=Color.btn_neutral_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT,
+            padx=6,
+            cursor="hand2",
+            command=self._on_accept_terms_click,
+        )
         self._token_btn = tk.Button(
             config_frame,
             text=self._token_button_text(),
@@ -986,9 +1026,7 @@ class TranscriptReviewer:
             cursor="hand2",
             command=self._on_token_btn_click,
         )
-        # Only show if pyannote is the initial backend
-        if self._initial_backend == "pyannote":
-            self._token_btn.pack(side=tk.RIGHT, padx=(6, 0), pady=7)
+        self._update_pyannote_setup_btn_visibility()
 
         open_folder_btn = HoverButton(
             config_frame,
@@ -1012,7 +1050,17 @@ class TranscriptReviewer:
         ToolTip(self._diarize_btn, "Run speaker diarization to identify who said what")
         ToolTip(self._edit_btn, "Toggle inline editing of the transcript (Ctrl+E)")
         ToolTip(self._backend_dropdown, "Select diarization engine")
+        ToolTip(
+            self._audio_mode_dropdown,
+            "Audio source: Auto picks system or mic/mixed file; "
+            "System uses loopback audio; Mixed uses mic.wav for single-file recordings",
+        )
         ToolTip(self._speaker_count_dropdown, "Expected number of speakers (Auto = let the engine decide)")
+        ToolTip(
+            self._accept_terms_btn,
+            "Open Hugging Face to accept pyannote model terms",
+        )
+        ToolTip(self._token_btn, "Manage your HuggingFace token for pyannote")
         ToolTip(open_folder_btn, "Open the session folder in Explorer")
 
         # 1px divider below toolbar
@@ -1503,6 +1551,15 @@ class TranscriptReviewer:
         self._clear_transcript()
         self._show_message(msg)
 
+    def show_pyannote_access_failure(self) -> None:
+        """Show pyannote HF access failure guidance and recovery actions."""
+        msg = (
+            "Pyannote model access failed. Open Hugging Face to accept model "
+            "terms, verify your token, or switch to SpeechBrain."
+        )
+        self.show_error(msg)
+        self._show_pyannote_access_dialog()
+
     # ------------------------------------------------------------------
     # Edit mode
     # ------------------------------------------------------------------
@@ -1557,7 +1614,9 @@ class TranscriptReviewer:
         self._diarize_btn.configure(state=tk.DISABLED, bg=Color.disabled)
         self._version_dropdown.configure(state=tk.DISABLED)
         self._backend_dropdown.configure(state=tk.DISABLED)
+        self._audio_mode_dropdown.configure(state=tk.DISABLED)
         self._speaker_count_dropdown.configure(state=tk.DISABLED)
+        self._accept_terms_btn.configure(state=tk.DISABLED)
         self._token_btn.configure(state=tk.DISABLED)
 
         # Bind right-click context menu
@@ -1575,7 +1634,9 @@ class TranscriptReviewer:
         # Re-enable navigation and action buttons
         self._version_dropdown.configure(state="readonly")
         self._backend_dropdown.configure(state="readonly")
+        self._audio_mode_dropdown.configure(state="readonly")
         self._speaker_count_dropdown.configure(state="readonly")
+        self._accept_terms_btn.configure(state=tk.NORMAL)
         self._token_btn.configure(state=tk.NORMAL)
         self._update_button_state()
 
@@ -1863,8 +1924,11 @@ class TranscriptReviewer:
         if self._selected_session is None:
             return
 
-        if not self._selected_session.loopback_files:
-            self._status_label.configure(text="No loopback audio found")
+        if (
+            not self._selected_session.has_mic_wav
+            and not self._selected_session.loopback_files
+        ):
+            self._status_label.configure(text="No audio files found")
             return
 
         if self._on_diarize is None:
@@ -1878,6 +1942,8 @@ class TranscriptReviewer:
         backend = self._backend_var.get().strip()
         speaker_count_text = self._speaker_count_var.get().strip()
         num_speakers = int(speaker_count_text) if speaker_count_text.isdigit() else None
+        audio_mode_display = self._audio_mode_var.get().strip()
+        audio_mode = _AUDIO_MODE_VALUES.get(audio_mode_display, "auto")
 
         # Validate pyannote backend
         if backend == "pyannote":
@@ -1903,7 +1969,12 @@ class TranscriptReviewer:
         self._window.update_idletasks()
 
         self._on_diarize(
-            self._selected_session.path, filename, backend, self._hf_token, num_speakers,
+            self._selected_session.path,
+            filename,
+            backend,
+            self._hf_token,
+            num_speakers,
+            audio_mode,
         )
 
     def _validate_pyannote(self) -> bool:
@@ -1935,11 +2006,9 @@ class TranscriptReviewer:
             token = simpledialog.askstring(
                 "HuggingFace Token Required",
                 "pyannote requires a HuggingFace token.\n\n"
-                "1. Create an account at huggingface.co\n"
-                "2. Accept model terms at:\n"
-                "   huggingface.co/pyannote/embedding\n"
-                "3. Generate a token at:\n"
-                "   huggingface.co/settings/tokens\n\n"
+                "Use 'Accept Terms' and 'HF Token' in the toolbar, or:\n"
+                f"1. Accept model terms at {PYANNOTE_EMBEDDING_URL}\n"
+                f"2. Create a token at {HF_TOKEN_SETTINGS_URL}\n\n"
                 "Enter your HuggingFace token:",
                 parent=self._window,
             )
@@ -2032,8 +2101,8 @@ class TranscriptReviewer:
         return self._initial_backend == "pyannote"
 
     def _on_backend_changed(self) -> None:
-        """Handle backend dropdown selection change — show/hide token button."""
-        self._update_token_btn_visibility()
+        """Handle backend dropdown selection change — show/hide pyannote setup buttons."""
+        self._update_pyannote_setup_btn_visibility()
 
     def _token_button_text(self) -> str:
         """Return display text for the HF token button."""
@@ -2045,19 +2114,117 @@ class TranscriptReviewer:
         """Refresh the token button text and visibility."""
         if hasattr(self, "_token_btn"):
             self._token_btn.configure(text=self._token_button_text())
-            self._update_token_btn_visibility()
+            self._update_pyannote_setup_btn_visibility()
 
-    def _update_token_btn_visibility(self) -> None:
-        """Show the token button only when pyannote is selected."""
+    def _update_pyannote_setup_btn_visibility(self) -> None:
+        """Show pyannote setup buttons only when pyannote is selected."""
         if not hasattr(self, "_token_btn"):
             return
         if self._is_pyannote_selected():
-            self._token_btn.pack(
+            self._accept_terms_btn.pack(
                 side=tk.RIGHT, padx=(6, 0), pady=7,
                 after=self._speaker_count_dropdown,
             )
+            self._token_btn.pack(
+                side=tk.RIGHT, padx=(6, 0), pady=7,
+                after=self._accept_terms_btn,
+            )
         else:
+            self._accept_terms_btn.pack_forget()
             self._token_btn.pack_forget()
+
+    @staticmethod
+    def _open_hf_url(url: str) -> None:
+        """Open a Hugging Face page in the user's default browser."""
+        try:
+            webbrowser.open(url, new=2)
+        except Exception:
+            logger.warning("Failed to open browser for %s", url, exc_info=True)
+
+    def _on_accept_terms_click(self) -> None:
+        """Open the pinned pyannote model page to accept terms."""
+        self._open_hf_url(PYANNOTE_EMBEDDING_URL)
+
+    def _on_create_token_click(self) -> None:
+        """Open Hugging Face token settings in the user's browser."""
+        self._open_hf_url(HF_TOKEN_SETTINGS_URL)
+
+    def _show_pyannote_access_dialog(self) -> None:
+        """Prompt the user with recovery actions for pyannote access failures."""
+        dialog = tk.Toplevel(self._window)
+        dialog.title("Pyannote Model Access")
+        dialog.configure(bg=Color.bg_primary)
+        dialog.resizable(False, False)
+        dialog.transient(self._window)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        w, h = 460, 210
+        px = self._window.winfo_x() + (self._window.winfo_width() - w) // 2
+        py = self._window.winfo_y() + (self._window.winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{px}+{py}")
+
+        tk.Label(
+            dialog,
+            text=(
+                "Pyannote model access failed.\n\n"
+                "Accept the model terms on Hugging Face, verify your token, "
+                "or switch to SpeechBrain."
+            ),
+            font=(Font.family, Font.size_small),
+            fg=Color.fg_secondary,
+            bg=Color.bg_primary,
+            justify=tk.LEFT,
+            wraplength=420,
+        ).pack(padx=16, pady=(14, 10), anchor=tk.W)
+
+        btn_frame = tk.Frame(dialog, bg=Color.bg_primary)
+        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 14))
+
+        def _open_model_page() -> None:
+            self._on_accept_terms_click()
+            dialog.destroy()
+
+        def _edit_token() -> None:
+            dialog.destroy()
+            self._on_token_btn_click()
+
+        def _use_speechbrain() -> None:
+            if hasattr(self, "_backend_var"):
+                self._backend_var.set("speechbrain")
+            self._update_pyannote_setup_btn_visibility()
+            self._status_label.configure(text="Backend set to speechbrain")
+            dialog.destroy()
+
+        tk.Button(
+            btn_frame, text="Open Model Page",
+            font=(Font.family, Font.size_body),
+            fg=Color.fg_bright, bg=Color.accent,
+            activebackground=Color.accent_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT, padx=12, cursor="hand2",
+            command=_open_model_page,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Button(
+            btn_frame, text="Edit Token",
+            font=(Font.family, Font.size_body),
+            fg=Color.fg_bright, bg=Color.btn_neutral,
+            activebackground=Color.btn_neutral_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT, padx=12, cursor="hand2",
+            command=_edit_token,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Button(
+            btn_frame, text="Use SpeechBrain",
+            font=(Font.family, Font.size_body),
+            fg=Color.fg_bright, bg=Color.success,
+            activebackground=Color.success_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT, padx=12, cursor="hand2",
+            command=_use_speechbrain,
+        ).pack(side=tk.LEFT)
 
     def _on_token_btn_click(self) -> None:
         """Open the HF token management dialog."""
@@ -2070,7 +2237,7 @@ class TranscriptReviewer:
 
         # Center on parent
         dialog.update_idletasks()
-        w, h = 420, 200
+        w, h = 420, 240
         px = self._window.winfo_x() + (self._window.winfo_width() - w) // 2
         py = self._window.winfo_y() + (self._window.winfo_height() - h) // 2
         dialog.geometry(f"{w}x{h}+{px}+{py}")
@@ -2084,12 +2251,28 @@ class TranscriptReviewer:
             wraplength=380,
         ).pack(padx=16, pady=(12, 4), anchor=tk.W)
 
-        tk.Label(
-            dialog,
-            text="Accept model terms at huggingface.co/pyannote/embedding",
+        setup_frame = tk.Frame(dialog, bg=Color.bg_primary)
+        setup_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        tk.Button(
+            setup_frame, text="Accept Model Terms",
             font=(Font.family, Font.size_tiny),
-            fg=Color.fg_dim, bg=Color.bg_primary,
-        ).pack(padx=16, pady=(0, 8), anchor=tk.W)
+            fg=Color.fg_bright, bg=Color.btn_neutral,
+            activebackground=Color.btn_neutral_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT, padx=8, cursor="hand2",
+            command=self._on_accept_terms_click,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Button(
+            setup_frame, text="Create Token",
+            font=(Font.family, Font.size_tiny),
+            fg=Color.fg_bright, bg=Color.btn_neutral,
+            activebackground=Color.btn_neutral_hover,
+            activeforeground=Color.fg_bright,
+            relief=tk.FLAT, padx=8, cursor="hand2",
+            command=self._on_create_token_click,
+        ).pack(side=tk.LEFT)
 
         # Token entry
         entry_frame = tk.Frame(dialog, bg=Color.bg_primary)
@@ -2776,7 +2959,10 @@ class TranscriptReviewer:
                 bg=Color.disabled,
                 state=tk.DISABLED,
             )
-        elif not self._selected_session.loopback_files:
+        elif (
+            not self._selected_session.has_mic_wav
+            and not self._selected_session.loopback_files
+        ):
             self._diarize_btn.configure(
                 text="\U0001f5e3  Identify Speakers",
                 bg=Color.disabled,
@@ -2814,10 +3000,13 @@ class TranscriptReviewer:
 
         control_state = tk.DISABLED if any_running or self._edit_mode else "readonly"
         self._backend_dropdown.configure(state=control_state)
+        self._audio_mode_dropdown.configure(state=control_state)
         self._speaker_count_dropdown.configure(state=control_state)
-        self._token_btn.configure(
-            state=tk.DISABLED if any_running or self._edit_mode else tk.NORMAL
+        pyannote_btn_state = (
+            tk.DISABLED if any_running or self._edit_mode else tk.NORMAL
         )
+        self._accept_terms_btn.configure(state=pyannote_btn_state)
+        self._token_btn.configure(state=pyannote_btn_state)
 
     # ------------------------------------------------------------------
     # Window geometry persistence
