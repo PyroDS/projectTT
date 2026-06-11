@@ -43,7 +43,11 @@ from tachyon.exporter import (
 from tachyon.session import TranscriptSegment
 from tachyon.batch import BatchProgress
 from tachyon.diarizer import DiarizeProgress, SpeakerInfo, SPEAKER_COLORS, load_speaker_map
-from tachyon.model_pins import HF_TOKEN_SETTINGS_URL, PYANNOTE_EMBEDDING_URL
+from tachyon.model_pins import (
+    HF_TOKEN_SETTINGS_URL,
+    PYANNOTE_COMMUNITY_URL,
+    PYANNOTE_EMBEDDING_URL,
+)
 from tachyon.ui.theme import Color, Font, Dim, ToolTip
 from tachyon.ui.widgets import HoverButton, GradientBar, SessionCard
 
@@ -117,7 +121,7 @@ _REVIEWER_TUTORIAL_STEPS: list[tuple[str, str, str, str]] = [
 _TOUR_CARD_W = 680
 _TOUR_CARD_H = 420
 _TOUR_PADDING = 14
-_BACKEND_OPTIONS = ("speechbrain", "pyannote", "resemblyzer")
+_BACKEND_OPTIONS = ("speechbrain", "pyannote", "pyannote_community", "resemblyzer")
 _AUDIO_MODE_OPTIONS = ("Auto", "System", "Mixed")
 _AUDIO_MODE_VALUES: dict[str, str] = {
     "Auto": "auto",
@@ -1060,7 +1064,7 @@ class TranscriptReviewer:
             self._accept_terms_btn,
             "Open Hugging Face to accept pyannote model terms",
         )
-        ToolTip(self._token_btn, "Manage your HuggingFace token for pyannote")
+        ToolTip(self._token_btn, "Manage your HuggingFace token for pyannote backends")
         ToolTip(open_folder_btn, "Open the session folder in Explorer")
 
         # 1px divider below toolbar
@@ -1945,10 +1949,14 @@ class TranscriptReviewer:
         audio_mode_display = self._audio_mode_var.get().strip()
         audio_mode = _AUDIO_MODE_VALUES.get(audio_mode_display, "auto")
 
-        # Validate pyannote backend
+        # Validate pyannote backends
         if backend == "pyannote":
             if not self._validate_pyannote():
                 return
+        elif backend == "pyannote_community":
+            if not self._validate_pyannote_community():
+                return
+        backend = self._backend_var.get().strip()
 
         # Pick the best source transcript for diarization.
         # Prefer the latest batch (non-diarized) version over original.
@@ -1984,6 +1992,8 @@ class TranscriptReviewer:
         If not installed, offers to install via pip in a background thread.
         """
         import importlib.util
+        from tachyon.diarization.community_runtime import get_pyannote_major_version
+
         try:
             pyannote_found = importlib.util.find_spec("pyannote.audio") is not None
         except (ModuleNotFoundError, ValueError):
@@ -2001,6 +2011,23 @@ class TranscriptReviewer:
                 self._install_pyannote()
             return False
 
+        major = get_pyannote_major_version()
+        if major is not None and major >= 4:
+            answer = messagebox.askyesno(
+                "Use Community-1?",
+                "pyannote.audio 4.x is installed, which is for the new "
+                "Community-1 diarizer.\n\n"
+                "The legacy pyannote embedding backend requires "
+                "pyannote.audio==3.4.0.\n\n"
+                "Switch to pyannote_community now?",
+                parent=self._window,
+            )
+            if answer:
+                self._backend_var.set("pyannote_community")
+                self._update_pyannote_setup_btn_visibility()
+                return self._validate_pyannote_community()
+            return False
+
         # Check if we have an HF token
         if not self._hf_token:
             token = simpledialog.askstring(
@@ -2008,6 +2035,40 @@ class TranscriptReviewer:
                 "pyannote requires a HuggingFace token.\n\n"
                 "Use 'Accept Terms' and 'HF Token' in the toolbar, or:\n"
                 f"1. Accept model terms at {PYANNOTE_EMBEDDING_URL}\n"
+                f"2. Create a token at {HF_TOKEN_SETTINGS_URL}\n\n"
+                "Enter your HuggingFace token:",
+                parent=self._window,
+            )
+            if not token or not token.strip():
+                return False
+            self._hf_token = token.strip()
+
+        return True
+
+    def _validate_pyannote_community(self) -> bool:
+        """Validate Community-1 runtime dependencies and HF token."""
+        from tachyon.diarization.community_runtime import community_runtime_issues
+
+        issues = community_runtime_issues()
+        if issues:
+            answer = messagebox.askyesno(
+                "Install Community-1 dependencies?",
+                "pyannote.audio 4.x is required for the Community-1 diarizer.\n\n"
+                f"Install {self._PYANNOTE_COMMUNITY_PINNED_SPEC} now?\n\n"
+                "Note: this may affect the legacy pyannote embedding backend "
+                "until you reinstall pyannote.audio==3.4.0.",
+                parent=self._window,
+            )
+            if answer:
+                self._install_pyannote_community()
+            return False
+
+        if not self._hf_token:
+            token = simpledialog.askstring(
+                "HuggingFace Token Required",
+                "Community-1 requires a HuggingFace token.\n\n"
+                "Use 'Accept Terms' and 'HF Token' in the toolbar, or:\n"
+                f"1. Accept model terms at {PYANNOTE_COMMUNITY_URL}\n"
                 f"2. Create a token at {HF_TOKEN_SETTINGS_URL}\n\n"
                 "Enter your HuggingFace token:",
                 parent=self._window,
@@ -2028,9 +2089,27 @@ class TranscriptReviewer:
     # backends in favor of torchcodec) that are untested against this
     # diarizer.  Stay on 3.4.0 until 4.x is explicitly verified.
     _PYANNOTE_PINNED_SPEC: str = "pyannote.audio==3.4.0"
+    _PYANNOTE_COMMUNITY_PINNED_SPEC: str = "pyannote.audio>=4.0.0,<5.0.0"
 
     def _install_pyannote(self) -> None:
-        """Run a pinned ``pip install`` of pyannote.audio in a background thread."""
+        """Run a pinned ``pip install`` of pyannote.audio 3.x in a background thread."""
+        self._install_pyannote_package(
+            self._PYANNOTE_PINNED_SPEC,
+            success_message="pyannote.audio installed for the legacy embedding backend.",
+        )
+
+    def _install_pyannote_community(self) -> None:
+        """Run a pinned ``pip install`` of pyannote.audio 4.x for Community-1."""
+        self._install_pyannote_package(
+            self._PYANNOTE_COMMUNITY_PINNED_SPEC,
+            success_message=(
+                "pyannote.audio 4.x installed for Community-1 diarization.\n\n"
+                "Click 'Identify Speakers' again to proceed."
+            ),
+        )
+
+    def _install_pyannote_package(self, spec: str, success_message: str) -> None:
+        """Install a pinned pyannote.audio package spec in a background thread."""
         import subprocess
         import sys
         import threading
@@ -2039,11 +2118,8 @@ class TranscriptReviewer:
         self._update_button_state()
         self._progress_bar.configure(mode="indeterminate")
         self._progress_bar.start(15)
-        self._status_label.configure(
-            text=f"Installing {self._PYANNOTE_PINNED_SPEC}...",
-        )
-
-        spec = self._PYANNOTE_PINNED_SPEC
+        self._status_label.configure(text=f"Installing {spec}...")
+        self._install_success_message = success_message
 
         def _run() -> None:
             try:
@@ -2075,11 +2151,21 @@ class TranscriptReviewer:
         self._update_button_state()
 
         if success:
+            try:
+                from tachyon.diarization.community_runtime import reset_pyannote_import_state
+                reset_pyannote_import_state()
+            except Exception:
+                logger.warning("Failed to refresh pyannote import state", exc_info=True)
             self._status_label.configure(text="pyannote.audio installed")
-            messagebox.showinfo(
-                "Installation Complete",
+            message = getattr(
+                self,
+                "_install_success_message",
                 "pyannote.audio has been installed successfully.\n\n"
                 "Click 'Identify Speakers' again to proceed.",
+            )
+            messagebox.showinfo(
+                "Installation Complete",
+                message,
                 parent=self._window,
             )
         else:
@@ -2094,11 +2180,16 @@ class TranscriptReviewer:
     # HF Token management
     # ------------------------------------------------------------------
 
-    def _is_pyannote_selected(self) -> bool:
-        """Check if the pyannote backend is currently selected."""
+    def _needs_hf_setup(self) -> bool:
+        """Check if the selected backend requires Hugging Face setup."""
         if hasattr(self, "_backend_var"):
-            return self._backend_var.get().strip() == "pyannote"
-        return self._initial_backend == "pyannote"
+            backend = self._backend_var.get().strip()
+            return backend in {"pyannote", "pyannote_community"}
+        return self._initial_backend in {"pyannote", "pyannote_community"}
+
+    def _is_pyannote_selected(self) -> bool:
+        """Backward-compatible alias for HF setup visibility."""
+        return self._needs_hf_setup()
 
     def _on_backend_changed(self) -> None:
         """Handle backend dropdown selection change — show/hide pyannote setup buttons."""
@@ -2142,8 +2233,11 @@ class TranscriptReviewer:
             logger.warning("Failed to open browser for %s", url, exc_info=True)
 
     def _on_accept_terms_click(self) -> None:
-        """Open the pinned pyannote model page to accept terms."""
-        self._open_hf_url(PYANNOTE_EMBEDDING_URL)
+        """Open the Hugging Face model page for the selected pyannote backend."""
+        if hasattr(self, "_backend_var") and self._backend_var.get().strip() == "pyannote_community":
+            self._open_hf_url(PYANNOTE_COMMUNITY_URL)
+        else:
+            self._open_hf_url(PYANNOTE_EMBEDDING_URL)
 
     def _on_create_token_click(self) -> None:
         """Open Hugging Face token settings in the user's browser."""
@@ -2245,7 +2339,7 @@ class TranscriptReviewer:
         # Description
         tk.Label(
             dialog,
-            text="HuggingFace token for pyannote speaker embeddings.",
+            text="HuggingFace token for pyannote speaker models.",
             font=(Font.family, Font.size_small),
             fg=Color.fg_secondary, bg=Color.bg_primary,
             wraplength=380,
@@ -2363,6 +2457,14 @@ class TranscriptReviewer:
 
     def set_backend_config(self, backend: str, hf_token: str) -> None:
         """Set the initial backend and HF token from app config."""
+        if backend == "pyannote":
+            try:
+                from tachyon.diarization.community_runtime import get_pyannote_major_version
+                major = get_pyannote_major_version()
+            except Exception:
+                major = None
+            if major is not None and major >= 4:
+                backend = "pyannote_community"
         self._initial_backend = backend
         self._hf_token = hf_token
         # Update dropdown if window already exists

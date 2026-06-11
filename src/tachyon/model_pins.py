@@ -61,3 +61,8 @@ PYANNOTE_EMBEDDING_REPO: str     = "pyannote/embedding"
 PYANNOTE_EMBEDDING_REVISION: str = "4db4899737a38b2d618bbd74350915aa10293cb2"
 PYANNOTE_EMBEDDING_URL: str      = "https://huggingface.co/pyannote/embedding"
 HF_TOKEN_SETTINGS_URL: str       = "https://huggingface.co/settings/tokens"
+
+# pyannote Community-1 full diarization pipeline -- optional high-accuracy backend.
+PYANNOTE_COMMUNITY_REPO: str     = "pyannote/speaker-diarization-community-1"
+PYANNOTE_COMMUNITY_REVISION: str = "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
+PYANNOTE_COMMUNITY_URL: str      = "https://huggingface.co/pyannote/speaker-diarization-community-1"

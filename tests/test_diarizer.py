@@ -123,6 +123,16 @@ def test_resolve_audio_sources_mixed_mode(tmp_path: Path) -> None:
     assert wavs == [(audio_dir / "mic.wav", "mic")]
 
 
+def test_legacy_pyannote_backend_rejects_pyannote_4(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tachyon.diarization.community_runtime as runtime
+
+    monkeypatch.setattr(runtime, "get_pyannote_major_version", lambda: 4)
+    diarizer = Diarizer(config=DiarizeConfig(backend="pyannote", hf_token="hf_test"))
+
+    with pytest.raises(RuntimeError, match="select pyannote_community"):
+        diarizer._get_encoder()
+
+
 def test_build_speaker_timeline_uses_subsecond_resolution() -> None:
     timeline = Diarizer._build_speaker_timeline(
         window_centers=[0.5, 1.5],

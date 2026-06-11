@@ -99,8 +99,9 @@ class DiarizeConfig:
         min_speakers: Minimum speaker count for auto-detection (default 2).
         max_speakers: Maximum speaker count for auto-detection (default 8).
         num_speakers: Exact speaker count override (bypasses auto-detection).
-        backend: Embedding backend — "speechbrain", "pyannote", or "resemblyzer".
-        hf_token: HuggingFace token, required for pyannote backend only.
+        backend: Embedding backend — "speechbrain", "pyannote", "resemblyzer",
+            or "pyannote_community" for the high-accuracy Community-1 pipeline.
+        hf_token: HuggingFace token, required for pyannote backends only.
         audio_mode: Audio source — "auto", "system", or "mixed".
         audio_file: Optional WAV filename override within ``audio/`` for mixed mode.
     """
@@ -211,6 +212,16 @@ class Diarizer:
             Tuple of (relabeled_segments, speaker_info_list), or None
             if cancelled or no suitable audio found.
         """
+        if self._config.backend == "pyannote_community":
+            from tachyon.diarization.community import run_community_diarization
+            return run_community_diarization(
+                session_dir=session_dir,
+                source_transcript=source_transcript,
+                config=self._config,
+                on_progress=self._on_progress,
+                stop_event=stop_event,
+            )
+
         transcript_path = session_dir / source_transcript
         if not transcript_path.exists():
             logger.error("Source transcript not found: %s", transcript_path)
@@ -638,6 +649,15 @@ class Diarizer:
                     EncoderClassifier, _SPEECHBRAIN_SAVEDIR,
                 )
             elif backend == "pyannote":
+                from tachyon.diarization.community_runtime import get_pyannote_major_version
+                major = get_pyannote_major_version()
+                if major is not None and major >= 4:
+                    raise RuntimeError(
+                        "The legacy pyannote embedding backend requires "
+                        "pyannote.audio==3.4.0. pyannote.audio 4.x is "
+                        "installed for the Community-1 backend; select "
+                        "pyannote_community instead.",
+                    )
                 from pyannote.audio import Model, Inference
                 if not self._config.hf_token:
                     raise RuntimeError(

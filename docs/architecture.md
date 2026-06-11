@@ -211,13 +211,14 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
     - **system**: uses loopback WAV(s), preserves "You" segments, relabels non-"You" only
     - **mixed**: uses `mic.wav` (or configured override), relabels all transcript segments — for single-file recordings with multiple speakers
     - **auto**: uses system when ≥2 non-"You" segments exist, otherwise falls back to mixed when `mic.wav` is available
-  - Three switchable embedding backends (user selects from reviewer UI dropdown):
-    - **speechbrain** (default): ECAPA-TDNN, 192-dim embeddings, 0.80% EER on VoxCeleb, auto-downloads from HuggingFace public hub, no token needed
-    - **pyannote** (optional): ~512-dim embeddings, 2.8% EER, requires `pip install pyannote.audio` + HuggingFace account + token + model terms acceptance; reviewer provides in-app links to accept terms and manage tokens
-    - **resemblyzer** (lightweight fallback): 256-dim GE2E embeddings, older 2018 model, already bundled
+  - Four switchable diarization backends (user selects from reviewer UI dropdown):
+    - **speechbrain** (default): ECAPA-TDNN embeddings + local clustering pipeline
+    - **pyannote** (optional): embedding model + local clustering pipeline; requires `pyannote.audio==3.4.0`
+    - **pyannote_community** (optional, high accuracy): full local `pyannote/speaker-diarization-community-1` pipeline with exclusive speaker turns and word-level alignment; requires `pyannote.audio` 4.x + HF token/terms
+    - **resemblyzer** (lightweight fallback): 256-dim GE2E embeddings + local clustering pipeline
   - All processing is local — embeddings and clustering run on CPU; Hugging Face is only used to download/cache model weights
-  - Sliding window embedding extraction: 3s windows with 1.5s hop across resolved audio file(s)
-  - Clustering via `scikit-learn`: Agglomerative (ward linkage) with max-silhouette auto speaker count (2-8)
+  - Embedding backends use sliding window extraction + clustering + word/timeline alignment
+  - Community-1 backend uses modular code under `tachyon/diarization/` and returns speaker turns directly from pyannote, then aligns transcript words to those turns
   - Multi-loopback aggregation: embeddings from all loopback WAVs are clustered together in system mode
   - 250ms speaker timeline built from window labels via majority vote
   - When JSON sidecar word timings are present, each word is aligned to the timeline and segments are split at speaker-change boundaries; otherwise whole-segment majority voting is used

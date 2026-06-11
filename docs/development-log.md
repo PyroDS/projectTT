@@ -20,7 +20,8 @@
 | `ui/reviewer.py` | Done | Sci-fi reviewer: gradient toolbar, session cards, two-line header, status bar, window icon |
 | `ui/tray.py` | Done | Navy/cyan icon with LANCZOS anti-aliasing, module-level create_app_icon() |
 | `ui/overlay.py` | Done | HUD edge line, PulseIndicator recording, cyan glow border, 15pt captions |
-| `diarizer.py` | Done | Speaker diarization: sliding window embeddings + clustering + word-level timeline alignment/splitting, multi-loopback WAV discovery |
+| `diarizer.py` | Done | Embedding-clustering diarization + router to modular Community-1 backend |
+| `diarization/` | Done | Modular Community-1 adapter, runtime manager, source resolver, word-turn alignment |
 | `main.py` | Done | Entry point, component wiring, lifecycle management |
 | `setup.bat` | Done | First-time venv + deps + model download |
 | `run.bat` | Done | pythonw launcher (no console) |
@@ -36,6 +37,55 @@ Per the implementation plan, the build order is:
 4. **Polish & Packaging** (Steps 8-10): Config + Main + Launchers
 
 ## Work Log
+
+### 2026-06-10 — Fixed Community-1 revision and audio loading
+
+**What was done:**
+- Changed Community-1 model loading to call `Pipeline.from_pretrained(..., revision=...)`, matching the pyannote.audio 4.x API.
+- Replaced the temporary `"main"` Community-1 revision with the current Hugging Face commit SHA.
+- Changed Community-1 diarization execution to pass preloaded 16 kHz waveform audio into pyannote instead of a WAV path, avoiding the torchcodec/FFmpeg file-decoder path.
+- Added regression tests for the revision keyword call and in-memory waveform pipeline input.
+
+**Issue fixed:**
+- `Identify Speakers` with the `pyannote_community` backend failed with `ValueError: Revisions must be passed with revision keyword argument`, and would likely have hit torchcodec decoding failures after that.
+
+### 2026-06-10 — Guarded pyannote 3.x/4.x backend mismatch
+
+**What was done:**
+- Reviewer now auto-selects `pyannote_community` when config still says legacy `pyannote` but installed `pyannote.audio` is 4.x.
+- Legacy `pyannote` validation offers to switch to `pyannote_community` instead of starting a backend that cannot run under pyannote 4.x.
+- `diarizer.py` now fails fast with an actionable message if legacy `pyannote` is invoked directly while pyannote 4.x is installed.
+- Added regression coverage for the legacy/backend version guard.
+
+**Issue fixed:**
+- After installing Community-1 dependencies, the app could restart with `diarize_backend='pyannote'` and crash with `Revisions must be passed with revision keyword argument` because pyannote 4.x was being used by the old embedding backend.
+
+### 2026-06-10 — Fixed Community-1 install prompt loop
+
+**What was done:**
+- `community_runtime.py` now reads the installed `pyannote.audio` version from package metadata instead of importing `pyannote.audio`, avoiding stale 3.x module cache after an on-demand 4.x install.
+- Added `reset_pyannote_import_state()` and call it after successful pyannote install and before Community-1 pipeline import.
+- Added regression tests for metadata-based version detection and clearing cached pyannote modules.
+
+**Issue fixed:**
+- Clicking `Identify Speakers` after installing Community-1 dependencies could show the install dialog again instead of proceeding because the running app still had old pyannote modules cached.
+
+### 2026-06-10 — Modular Community-1 local diarization backend
+
+**What was done:**
+- Added modular package `src/tachyon/diarization/` with Community-1 adapter, runtime manager, source resolver, and word-turn alignment helpers.
+- Added new reviewer/backend option `pyannote_community` without changing existing `speechbrain`, `pyannote`, or `resemblyzer` paths.
+- Community-1 uses pinned `pyannote/speaker-diarization-community-1`, prefers `exclusive_speaker_diarization`, and aligns transcript words to speaker turns.
+- Reviewer setup supports separate on-demand install of `pyannote.audio` 4.x for Community-1 while legacy embedding backend remains on `3.4.0`.
+- Added tests in `tests/test_community_diarization.py` and updated architecture/implementation docs.
+
+**Decisions made:**
+- Keep Community-1 fully modular under `tachyon/diarization/` instead of extending the embedding-clustering code path.
+- Use a temporary canonical mono mix in session `audio/` when mic + loopback/system files need global speaker separation.
+- Reuse existing HF token storage and diarized export/versioning flow.
+
+**Issues encountered:**
+- pyannote 3.x and 4.x cannot safely share one install spec; Community-1 install warns that legacy embedding backend may require reinstalling `pyannote.audio==3.4.0`.
 
 ### 2026-06-10 — Word-level diarization splitting
 
