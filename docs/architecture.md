@@ -219,6 +219,8 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - All processing is local — embeddings and clustering run on CPU; Hugging Face is only used to download/cache model weights
   - Embedding backends use sliding window extraction + clustering + word/timeline alignment
   - Community-1 backend uses modular code under `tachyon/diarization/` and returns speaker turns directly from pyannote, then aligns transcript words to those turns
+  - Community-1 model loading is pinned through `model_pins.py` and calls `Pipeline.from_pretrained(repo, revision=sha, token=...)`; `repo@revision` checkpoint strings are not used for pyannote.audio 4.x.
+  - Community-1 audio is resolved from session WAVs, normalized to mono 16 kHz by Tachyon, then passed to pyannote as an in-memory `{"waveform": tensor, "sample_rate": 16000}` object. This keeps diarization on the app's `soundfile`/`soxr` path and avoids pyannote's torchcodec/FFmpeg file decoder.
   - Multi-loopback aggregation: embeddings from all loopback WAVs are clustered together in system mode
   - 250ms speaker timeline built from window labels via majority vote
   - When JSON sidecar word timings are present, each word is aligned to the timeline and segments are split at speaker-change boundaries; otherwise whole-segment majority voting is used

@@ -38,6 +38,12 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-06-10 — Synced Community-1 architecture docs
+
+**What was done:**
+- Updated `docs/architecture.md` and `docs/implementation-plan.md` to document Community-1's SHA-pinned `revision=` model load path.
+- Documented that Tachyon preloads and normalizes diarization audio, then passes an in-memory waveform object to pyannote to avoid torchcodec/FFmpeg file decoding.
+
 ### 2026-06-10 — Fixed Community-1 revision and audio loading
 
 **What was done:**
