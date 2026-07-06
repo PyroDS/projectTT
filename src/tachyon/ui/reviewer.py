@@ -307,6 +307,7 @@ class TranscriptReviewer:
         self._selected_session: Optional[SessionInfo] = None
         self._session_rows: dict[str, list[tk.Widget]] = {}  # path_str -> [row, line1_frame, ...]
         self._batch_running: bool = False
+        self._batch_warning: str = ""
         self._diarize_running: bool = False
         self._recording_active: bool = False
         self._installing_package: bool = False
@@ -392,14 +393,18 @@ class TranscriptReviewer:
         self._batch_running = running
         self._update_button_state()
         if not running:
+            self._batch_warning = ""
             self._progress_bar["value"] = 0
             self._status_label.configure(text="Ready")
 
     def update_progress(self, progress: BatchProgress) -> None:
         """Update the progress bar and status label (call on main thread)."""
         self._progress_bar["value"] = progress.percent
+        if getattr(progress, "warning", ""):
+            self._batch_warning = progress.warning
         detail = f" - {progress.detail}" if progress.detail else ""
-        self._status_label.configure(text=f"{progress.phase}{detail}")
+        warning = f" — ⚠ {self._batch_warning}" if self._batch_warning else ""
+        self._status_label.configure(text=f"{progress.phase}{detail}{warning}")
 
     def set_diarize_running(self, running: bool) -> None:
         """Update diarize state -- changes button text and progress bar."""
@@ -428,7 +433,12 @@ class TranscriptReviewer:
         self._batch_running = False
         self._update_button_state()
         self._progress_bar["value"] = 100
-        self._status_label.configure(text="Complete")
+        if self._batch_warning:
+            self._status_label.configure(
+                text=f"Complete — ⚠ {self._batch_warning}"
+            )
+        else:
+            self._status_label.configure(text="Complete")
 
         # Refresh the version dropdown for the current session
         if self._selected_session is not None:

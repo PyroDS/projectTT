@@ -48,6 +48,35 @@ logger = logging.getLogger(__name__)
 TARGET_SAMPLERATE: int = 16_000       # Whisper expects 16 kHz
 CHUNK_DURATION_SEC: float = 3.0       # ~3 s of audio per queued chunk
 WASAPI_HOSTAPI_NAME: str = "Windows WASAPI"
+PAD_THRESHOLD_SEC: float = 0.5        # min wall-clock deficit before padding
+
+
+def compute_padding_samples(
+    now: float,
+    stream_start_wall: float,
+    samples_written: int,
+    native_sr: int,
+    threshold_sec: float = PAD_THRESHOLD_SEC,
+) -> int:
+    """Zero samples needed to bring a WAV timeline up to wall clock.
+
+    WASAPI loopback delivers no frames while nothing is playing, so a
+    loopback WAV's timeline silently compresses during system-audio
+    silence unless the gap is filled with zeros.  This computes the
+    deficit between wall-clock elapsed time and samples actually written.
+
+    Returns 0 when the deficit is below ``threshold_sec`` — this covers
+    callback jitter, device latency, and devices that deliver continuous
+    silence frames (where the deficit never grows).  Padding counts
+    toward ``samples_written``, so the cumulative formulation is
+    self-correcting and sub-threshold jitter never accumulates.
+    """
+    if native_sr <= 0 or stream_start_wall <= 0.0:
+        return 0
+    deficit = int((now - stream_start_wall) * native_sr) - samples_written
+    if deficit > int(threshold_sec * native_sr):
+        return deficit
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +117,11 @@ class _LoopbackState:
         buffer: Accumulated audio blocks before flushing.
         buffer_samples: Total sample count in the buffer.
         active: Whether this stream is running.
+        stream_start_wall: ``time.time()`` when the stream started.
+        samples_written: Mono samples written to the WAV (including
+            padding), at native_sr — tracks the WAV's timeline position.
+        padded_samples: Total zero samples injected to keep the WAV
+            timeline aligned with wall clock.
     """
 
     index: int
@@ -102,6 +136,9 @@ class _LoopbackState:
     buffer: list = field(default_factory=list)
     buffer_samples: int = 0
     active: bool = False
+    stream_start_wall: float = 0.0
+    samples_written: int = 0
+    padded_samples: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +191,12 @@ class AudioCapture:
         self._mic_buffer: list[np.ndarray] = []
         self._mic_buffer_samples: int = 0
         self._mic_native_sr: int = 0
+
+        # Wall-clock timeline tracking (mic is diagnostic-only; loopback
+        # streams pad their WAVs — see compute_padding_samples)
+        self._mic_stream_start_wall: float = 0.0
+        self._mic_samples_written: int = 0
+        self._mic_gap_warned: bool = False
 
     # ------------------------------------------------------------------
     # Properties
@@ -260,6 +303,9 @@ class AudioCapture:
         self._mic_buffer_samples = 0
         self._loopback_states = []
         self._mic_active = False
+        self._mic_stream_start_wall = 0.0
+        self._mic_samples_written = 0
+        self._mic_gap_warned = False
 
         # Resolve devices ------------------------------------------------
         wasapi_devices = self.get_devices()
@@ -305,6 +351,7 @@ class AudioCapture:
                     extra_settings=wasapi_settings,
                 )
                 self._mic_stream.start()
+                self._mic_stream_start_wall = time.time()
                 self._mic_active = True
                 logger.info("Mic stream started successfully")
 
@@ -378,6 +425,7 @@ class AudioCapture:
                     stream_callback=_make_callback(state),
                 )
                 state.stream.start_stream()
+                state.stream_start_wall = time.time()
                 state.active = True
                 logger.info("Loopback stream %d started: %s", i, lb_device["name"])
 
@@ -469,9 +517,11 @@ class AudioCapture:
                 logger.warning("Error closing mic.wav", exc_info=True)
             self._mic_wav = None
 
-        # Close loopback WAVs
+        # Close loopback WAVs (topping up trailing silence first so the
+        # final WAV duration matches the wall-clock session length)
         for state in self._loopback_states:
             if state.wav_writer is not None:
+                self._pad_loopback_wav(state, time.time())
                 try:
                     state.wav_writer.close()
                     logger.info("%s closed", state.wav_filename)
@@ -504,6 +554,22 @@ class AudioCapture:
             except Exception:
                 logger.warning("Error writing to mic.wav", exc_info=True)
 
+        # Diagnostic only: sounddevice mic capture is continuous, so the
+        # mic WAV should never fall behind wall clock. Warn once if it does.
+        self._mic_samples_written += len(mono)
+        if not self._mic_gap_warned and compute_padding_samples(
+            time.time(),
+            self._mic_stream_start_wall,
+            self._mic_samples_written,
+            self._mic_native_sr,
+            threshold_sec=1.0,
+        ) > 0:
+            self._mic_gap_warned = True
+            logger.warning(
+                "Mic stream fell behind wall clock by >1s — "
+                "mic.wav timeline may be compressed"
+            )
+
         # Accumulate into buffer
         self._mic_buffer.append(mono)
         self._mic_buffer_samples += len(mono)
@@ -524,6 +590,11 @@ class AudioCapture:
         if status_flags:
             logger.debug("Loopback stream %d status flags: %s", state.index, status_flags)
 
+        # Keep the WAV timeline aligned with wall clock: WASAPI loopback
+        # delivers nothing while no system audio plays, so any gap since
+        # the last write must be filled with silence before new data.
+        self._pad_loopback_wav(state, time.time())
+
         if in_data is None:
             return (None, pyaudio.paContinue)
 
@@ -539,6 +610,7 @@ class AudioCapture:
         if state.wav_writer is not None:
             try:
                 state.wav_writer.write(mono)
+                state.samples_written += len(mono)
             except Exception:
                 logger.warning("Error writing to %s", state.wav_filename, exc_info=True)
 
@@ -555,6 +627,44 @@ class AudioCapture:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _pad_loopback_wav(self, state: _LoopbackState, now: float) -> None:
+        """Write zeros to a loopback WAV to close any wall-clock deficit.
+
+        Runs on the PortAudio callback thread — the same thread that
+        already performs WAV writes — and is a no-op unless the timeline
+        has fallen more than PAD_THRESHOLD_SEC behind wall clock.  Zeros
+        are written in 1-second blocks to bound per-write allocation
+        (a multi-minute gap padded as one array would be huge).
+        """
+        if state.wav_writer is None:
+            return
+
+        pad = compute_padding_samples(
+            now, state.stream_start_wall, state.samples_written, state.native_sr,
+        )
+        if pad <= 0:
+            return
+
+        block = np.zeros(state.native_sr, dtype=np.float32)
+        remaining = pad
+        try:
+            while remaining > 0:
+                n = min(remaining, len(block))
+                state.wav_writer.write(block[:n])
+                state.samples_written += n
+                state.padded_samples += n
+                remaining -= n
+        except Exception:
+            logger.warning(
+                "Error padding %s with silence", state.wav_filename, exc_info=True,
+            )
+            return
+
+        logger.info(
+            "Loopback WAV %s padded %.1fs of silence to stay wall-clock aligned",
+            state.wav_filename, pad / state.native_sr,
+        )
 
     def _flush_buffer(self, source: str) -> None:
         """Concatenate accumulated mic buffer, resample to 16 kHz, and enqueue.
@@ -741,9 +851,15 @@ class AudioCapture:
         in that case the manifest omits the mic.wav entry entirely so that
         downstream ``data.get("mic", {}).get("file")`` calls still work.
         """
-        manifest: Dict[str, Any] = {"loopback": []}
+        # timeline_version 2 = loopback WAVs are silence-padded to stay
+        # wall-clock aligned, and entries carry start_wall_time anchors.
+        manifest: Dict[str, Any] = {"timeline_version": 2, "loopback": []}
         if mic_device_name is not None:
-            manifest["mic"] = {"file": "mic.wav", "device": mic_device_name}
+            manifest["mic"] = {
+                "file": "mic.wav",
+                "device": mic_device_name,
+                "start_wall_time": self._mic_stream_start_wall,
+            }
 
         for state in self._loopback_states:
             if state.active:
@@ -752,6 +868,7 @@ class AudioCapture:
                     "label": state.label,
                     "device": state.device_info.get("name", ""),
                     "source_tag": state.source_tag,
+                    "start_wall_time": state.stream_start_wall,
                 })
 
         manifest_path = audio_dir / "device_manifest.json"

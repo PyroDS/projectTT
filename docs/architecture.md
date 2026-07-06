@@ -73,7 +73,8 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Queue items: `AudioChunk(source="you"|"them"|"them:Label", audio=np.ndarray, timestamp=float)`
   - Source tag convention: `"you"` (mic), `"them"` (single loopback, backward compatible), `"them:Chat"` / `"them:Game"` (multi-loopback with labels)
   - Writes full session audio: `mic.wav` + `system.wav` (single) or `system_0.wav`, `system_1.wav`, ... (multi)
-  - Writes `device_manifest.json` in `audio/` directory mapping filenames to device names, labels, and source tags
+  - **Wall-clock silence padding**: WASAPI loopback delivers no frames while nothing plays, so loopback callbacks fill any wall-clock deficit (>0.5s, `compute_padding_samples`) with zeros before writing new data — loopback WAV timelines stay aligned with `mic.wav` and real time. A final top-up runs at `stop()`. Live chunk buffers are never padded (live timestamps are wall-clock stamped and gap-tolerant already). Mic falling behind is diagnostic-logged only.
+  - Writes `device_manifest.json` in `audio/` directory mapping filenames to device names, labels, and source tags; `timeline_version: 2` manifests also carry a `start_wall_time` anchor per stream so batch can align channels exactly
   - If loopback fails: logs warning, notifies user via tray callback, continues with mic only
 
 ### `transcriber.py` — Transcription Engine
@@ -195,6 +196,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
 - **Outputs**: Re-transcribed `TranscriptSegment` list, versioned markdown export
 - **Key details**:
   - Processes full WAV files (no 3s chunking) with beam search (`beam_size=5`)
+  - **Timeline alignment**: reads `start_wall_time` offsets from v2 manifests and shifts each loopback array onto the mic timebase at load (`_apply_start_offset`), so whisper timestamps, crosstalk suppression, and dedup all share one timebase. Legacy sessions (pre-padding) with a loopback WAV >5s shorter than `mic.wav` trigger a `BatchProgress.warning` shown in the reviewer — their timestamps cannot be reconstructed.
   - VAD + `condition_on_previous_text=True` for coherent segmentation
   - Crosstalk suppression: compares RMS energy between channels to detect bleed-through
   - Deduplication: removes near-duplicate segments from different channels
@@ -224,6 +226,7 @@ Tachyon Transcripts is a local-first, real-time meeting transcription tool for W
   - Multi-loopback aggregation: embeddings from all loopback WAVs are clustered together in system mode
   - 250ms speaker timeline built from window labels via majority vote
   - When JSON sidecar word timings are present, each word is aligned to the timeline and segments are split at speaker-change boundaries; otherwise whole-segment majority voting is used
+  - Consecutive same-speaker segments are merged into blocks, bounded by `DiarizeConfig.merge_max_gap_sec` (default 3s of silence between segments) and `merge_max_block_sec` (default 90s total span) so long monologues keep periodic timestamps and misaligned segments never fuse into giant blobs
   - Transcript segments relabeled from timeline using exact segment `start`/`end` timing from sidecar data
   - Optional fixed speaker-count hint (`num_speakers`) can be supplied from reviewer UI
   - Speaker map persisted as `speaker_map.json` for user-assigned names
@@ -298,6 +301,21 @@ output/
 **Note:** Single-loopback sessions produce `system.wav`. Multi-loopback sessions produce
 `system_0.wav`, `system_1.wav`, etc. The `device_manifest.json` maps each file to its
 source device and label. Old sessions without a manifest fall back to `mic.wav`/`system.wav`.
+
+`device_manifest.json` (timeline_version 2 — loopback WAVs silence-padded to wall clock):
+```json
+{
+  "timeline_version": 2,
+  "mic": {"file": "mic.wav", "device": "...", "start_wall_time": 1751712000.1},
+  "loopback": [
+    {"file": "system.wav", "label": "", "device": "...",
+     "source_tag": "them", "start_wall_time": 1751712000.4}
+  ]
+}
+```
+Manifests without `timeline_version` are legacy: their loopback WAVs contain no
+silence padding, so their timelines compress during system-audio silence and batch
+re-transcription warns that timestamps may misalign.
 
 ## Distribution & Packaging
 

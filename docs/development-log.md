@@ -38,6 +38,30 @@ Per the implementation plan, the build order is:
 
 ## Work Log
 
+### 2026-07-05 — Wall-clock alignment of loopback WAVs + diarizer merge guard
+
+**Issue fixed:**
+- Batch re-transcription produced badly interleaved "You"/"Them" segments (a user session showed every "Them" line ~68 s earlier than reality), and the pyannote/Community-1 flow then glued the mis-sorted "Them" lines into giant single-timestamp blobs.
+
+**Root cause:**
+- WASAPI loopback delivers no frames while nothing plays, and `_loopback_callback` only wrote delivered frames — so silence was never written to `system*.wav` and the file timeline compressed during every quiet stretch. `mic.wav` (sounddevice) is continuous, so it stayed wall-clock-true. Live captions were immune (chunks are wall-clock stamped), but batch trusts file position, so the two channels sorted on different timebases. Crosstalk suppression and dedup also compared misaligned sample windows.
+- `Diarizer._merge_consecutive_segments` merged all consecutive same-speaker segments regardless of time gap, amplifying the mis-sort into multi-minute blobs.
+
+**What was done:**
+- `capture.py`: added `compute_padding_samples()` (pure, threshold 0.5 s) and `_pad_loopback_wav()`; loopback callbacks now fill any wall-clock deficit with zeros (1 s blocks) before writing new data, including on the `in_data is None` path, plus a final top-up in `stop()`. Mic gets a diagnostic-only warning if it ever falls behind. Live chunk buffers are deliberately NOT padded — the live path's wall-clock timestamps are already gap-tolerant.
+- `capture.py`: `device_manifest.json` now carries `timeline_version: 2` and per-stream `start_wall_time` anchors.
+- `batch.py`: `_read_start_offsets()` + `_apply_start_offset()` shift each loopback array onto the mic timebase at load time (v2 manifests), so whisper timestamps, crosstalk suppression, and dedup all share one timebase with no further math. `_legacy_alignment_warning()` detects pre-fix sessions (loopback WAV >5 s shorter than mic) and surfaces a warning via a new `BatchProgress.warning` field, shown in the reviewer status label.
+- `diarizer.py` / `diarization/community.py`: `_merge_consecutive_segments` now takes `max_gap_sec` (3.0) and `max_block_sec` (90.0) — same-speaker segments separated by a larger gap, or whose combined span exceeds the cap, start a new block. New `DiarizeConfig` fields `merge_max_gap_sec` / `merge_max_block_sec`.
+- Tests: `tests/test_capture_padding.py` (padding math, callback integration, None-data path, mic guard), new offset/warning tests in `tests/test_batch.py`, new merge-guard tests in `tests/test_diarizer.py`. Full suite: 92 passed.
+
+**Decisions made:**
+- Align-at-load (prepend/trim audio) instead of shifting timestamps after transcription — keeps `_transcribe_channel` untouched and fixes crosstalk/dedup sample math for free.
+- Legacy remediation by matching batch text against the live `transcript.json` was evaluated and **deferred**: the compression is not a constant offset (error accumulates at each silence gap), so a global shift can worsen early segments; batch vs live text differs too much for reliable matching. Legacy sessions get a warning; the live transcript remains their authoritative timeline.
+- Known pre-existing quirk (out of scope): if a single live chunk straddles a loopback delivery gap, its pre-gap audio gets a slightly-late live timestamp.
+
+**Verification:**
+- Deterministic tests pass (92). Real-recording verification still recommended: record with a deliberate 60–90 s system-audio silence, confirm `system.wav` duration ≈ `mic.wav`, re-transcribe, and check interleaving matches the live transcript; re-transcribe a pre-fix session and confirm the ⚠ warning appears.
+
 ### 2026-06-10 — Synced Community-1 architecture docs
 
 **What was done:**

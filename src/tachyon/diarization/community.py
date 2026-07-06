@@ -157,7 +157,11 @@ def run_community_diarization(
         return None
 
     report("Merging segments", 85)
-    merged = Diarizer._merge_consecutive_segments(relabeled)
+    merged = Diarizer._merge_consecutive_segments(
+        relabeled,
+        max_gap_sec=config.merge_max_gap_sec,
+        max_block_sec=config.merge_max_block_sec,
+    )
 
     report("Building speaker profiles", 90)
     diarizer_stub = Diarizer(config=config)

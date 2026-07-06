@@ -164,6 +164,7 @@ tachyon-transcripts/
   ```
 - Creates `audio/` subfolder alongside the markdown file
 - Multi-loopback sessions use `system_0.wav`, `system_1.wav`, etc. and `audio/device_manifest.json` for mapping
+- Loopback WAVs are silence-padded to stay wall-clock aligned with `mic.wav` (WASAPI loopback delivers no frames during system-audio silence); the manifest carries `timeline_version: 2` and per-stream `start_wall_time` anchors that batch re-transcription uses to put all channels on one timebase
 - Output directory is configurable (default: `./output/` inside project)
 
 ### Step 6: System Tray (`ui/tray.py`)

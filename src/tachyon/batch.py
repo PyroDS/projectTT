@@ -70,6 +70,11 @@ class BatchConfig:
             segments to be considered duplicates.
         dedup_text_similarity: Minimum ratio of shared words for two
             segments to be considered duplicates (0.0 to 1.0).
+        legacy_duration_warn_sec: For sessions recorded before wall-clock
+            padding (manifest timeline_version < 2), warn when a loopback
+            WAV is shorter than mic.wav by more than this many seconds —
+            the loopback timeline is compressed and timestamps will
+            misalign.
     """
 
     beam_size: int = 5
@@ -80,6 +85,7 @@ class BatchConfig:
     energy_threshold: float = 0.10
     dedup_time_tolerance: float = 2.0
     dedup_text_similarity: float = 0.6
+    legacy_duration_warn_sec: float = 5.0
 
 
 @dataclass
@@ -91,11 +97,14 @@ class BatchProgress:
             "Transcribing mic", "Merging channels").
         percent: Overall completion percentage (0-100).
         detail: Optional detail string for the current operation.
+        warning: Non-fatal warning to surface to the user (e.g. legacy
+            session with a compressed loopback timeline).
     """
 
     phase: str
     percent: int
     detail: str = ""
+    warning: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +139,14 @@ class BatchTranscriber:
         self._config = config or BatchConfig()
         self._on_progress = on_progress
 
-    def _report(self, phase: str, percent: int, detail: str = "") -> None:
+    def _report(
+        self, phase: str, percent: int, detail: str = "", warning: str = "",
+    ) -> None:
         """Emit a progress update."""
         if self._on_progress is not None:
-            self._on_progress(BatchProgress(phase=phase, percent=percent, detail=detail))
+            self._on_progress(BatchProgress(
+                phase=phase, percent=percent, detail=detail, warning=warning,
+            ))
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -180,8 +193,13 @@ class BatchTranscriber:
         # -- Phase 1: Load and resample audio ------------------------------
         self._report("Loading audio", 5)
 
+        # Stream-start offsets (v2 manifests) put every loopback file on
+        # the mic timebase; legacy sessions get a misalignment warning.
+        start_offsets, has_wall_clock_manifest = self._read_start_offsets(audio_dir)
+
         mic_audio: Optional[np.ndarray] = None
         duration_seconds: float = 0.0
+        mic_duration_seconds: float = 0.0
 
         if mic_path is not None and mic_path.exists():
             mic_audio, mic_sr = sf.read(mic_path, dtype="float32")
@@ -189,7 +207,8 @@ class BatchTranscriber:
                 mic_audio = mic_audio.mean(axis=1).astype(np.float32)
             if mic_sr != TARGET_SAMPLERATE:
                 mic_audio = soxr.resample(mic_audio, mic_sr, TARGET_SAMPLERATE).astype(np.float32)
-            duration_seconds = max(duration_seconds, len(mic_audio) / TARGET_SAMPLERATE)
+            mic_duration_seconds = len(mic_audio) / TARGET_SAMPLERATE
+            duration_seconds = max(duration_seconds, mic_duration_seconds)
             logger.info(
                 "Loaded %s: %.1fs, RMS=%.6f, peak=%.4f",
                 mic_path.name,
@@ -203,6 +222,7 @@ class BatchTranscriber:
 
         # Load all loopback WAV files
         loopback_data: list[tuple[np.ndarray, str]] = []  # (audio, speaker_label)
+        loopback_durations: dict[str, float] = {}  # raw file durations
         for wav_path, speaker_label in loopback_wavs:
             if not wav_path.exists():
                 continue
@@ -217,6 +237,14 @@ class BatchTranscriber:
                     wav_path.name, speaker_label,
                 )
                 continue
+            loopback_durations[wav_path.name] = len(lb_audio) / TARGET_SAMPLERATE
+            offset = start_offsets.get(wav_path.name, 0.0)
+            if offset:
+                lb_audio = self._apply_start_offset(lb_audio, offset)
+                logger.info(
+                    "Applied %.3fs stream-start offset to %s",
+                    offset, wav_path.name,
+                )
             duration_seconds = max(duration_seconds, len(lb_audio) / TARGET_SAMPLERATE)
             logger.info(
                 "Loaded %s (%s): %.1fs, RMS=%.6f, peak=%.4f",
@@ -229,6 +257,16 @@ class BatchTranscriber:
 
             if self._cancelled(stop_event):
                 return []
+
+        alignment_warning = self._legacy_alignment_warning(
+            mic_duration_seconds,
+            loopback_durations,
+            has_wall_clock_manifest,
+            tolerance_sec=self._config.legacy_duration_warn_sec,
+        )
+        if alignment_warning:
+            logger.warning(alignment_warning)
+            self._report("Loading audio", 12, warning=alignment_warning)
 
         # -- Phase 2: Transcribe mic channel --------------------------------
         mic_segments: list[TranscriptSegment] = []
@@ -398,6 +436,117 @@ class BatchTranscriber:
             loopbacks.append((system_path, "Them"))
 
         return mic, loopbacks
+
+    # ------------------------------------------------------------------
+    # Internal: Cross-channel timeline alignment
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_start_offsets(audio_dir: Path) -> tuple[dict[str, float], bool]:
+        """Read per-file stream-start offsets from the device manifest.
+
+        Manifests with ``timeline_version >= 2`` (written by wall-clock
+        padded capture) carry a ``start_wall_time`` on the mic and each
+        loopback entry.  Offsets are seconds each loopback stream started
+        after the mic stream (or after the earliest loopback stream when
+        no mic entry exists).
+
+        Returns
+        -------
+        tuple[dict[str, float], bool]
+            ({wav_filename: offset_sec}, has_wall_clock_manifest).
+            Empty dict / False for legacy manifests.
+        """
+        manifest_path = audio_dir / "device_manifest.json"
+        if not manifest_path.exists():
+            return {}, False
+
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to read device_manifest.json for offsets", exc_info=True)
+            return {}, False
+
+        if data.get("timeline_version", 1) < 2:
+            return {}, False
+
+        loopback_starts: dict[str, float] = {}
+        for lb in data.get("loopback", []):
+            lb_file = lb.get("file")
+            lb_start = lb.get("start_wall_time")
+            if lb_file and isinstance(lb_start, (int, float)) and lb_start > 0:
+                loopback_starts[lb_file] = float(lb_start)
+
+        anchor = data.get("mic", {}).get("start_wall_time")
+        if not (isinstance(anchor, (int, float)) and anchor > 0):
+            anchor = min(loopback_starts.values()) if loopback_starts else None
+        if anchor is None:
+            return {}, True
+
+        offsets = {
+            name: start - anchor for name, start in loopback_starts.items()
+        }
+        return offsets, True
+
+    @staticmethod
+    def _apply_start_offset(
+        audio: np.ndarray,
+        offset_sec: float,
+        sr: int = TARGET_SAMPLERATE,
+    ) -> np.ndarray:
+        """Shift audio onto the mic timebase by its stream-start offset.
+
+        A positive offset (stream started after the mic) prepends that
+        much silence; a negative offset trims leading samples.  Applied
+        at load time so whisper timestamps, crosstalk suppression, and
+        dedup all operate on a shared timebase with no further math.
+        """
+        shift = int(round(offset_sec * sr))
+        if shift == 0:
+            return audio
+        if shift > 0:
+            return np.concatenate([
+                np.zeros(shift, dtype=np.float32), audio,
+            ])
+        trim = min(-shift, len(audio))
+        return audio[trim:]
+
+    @staticmethod
+    def _legacy_alignment_warning(
+        mic_duration_sec: float,
+        loopback_durations: dict[str, float],
+        has_wall_clock_manifest: bool,
+        tolerance_sec: float = 5.0,
+    ) -> Optional[str]:
+        """Detect a compressed loopback timeline in a legacy recording.
+
+        Sessions recorded before wall-clock padding wrote no silence to
+        loopback WAVs, so system-audio timelines shrink during quiet
+        stretches and batch timestamps misalign against the mic.  That
+        lost time cannot be reconstructed — only surfaced.
+
+        Returns a user-facing warning message, or ``None`` when the
+        session is padded (v2 manifest), has no mic to compare against,
+        or the durations agree within ``tolerance_sec``.
+        """
+        if has_wall_clock_manifest or mic_duration_sec <= 0:
+            return None
+
+        worst_name = ""
+        worst_gap = 0.0
+        for name, dur in loopback_durations.items():
+            gap = mic_duration_sec - dur
+            if gap > worst_gap:
+                worst_gap = gap
+                worst_name = name
+        if worst_gap <= tolerance_sec:
+            return None
+
+        return (
+            f"System audio ({worst_name}) is {worst_gap:.0f}s shorter than the mic "
+            "recording — 'Them' timestamps may be misaligned. Sessions recorded "
+            "with this version won't have this issue."
+        )
 
     # ------------------------------------------------------------------
     # Internal: Whisper transcription

@@ -320,3 +320,78 @@ def test_load_pyannote_pinned_raises_on_access_exception() -> None:
         f"{PYANNOTE_EMBEDDING_REPO}@{PYANNOTE_EMBEDDING_REVISION}",
         use_auth_token="hf_test_token",
     )
+
+
+# ---------------------------------------------------------------------------
+# Consecutive-segment merging (gap guard + block cap)
+# ---------------------------------------------------------------------------
+
+def test_merge_adjacent_same_speaker_segments() -> None:
+    segments = [
+        TranscriptSegment("Speaker 1", "hello", 0.0, 2.0),
+        TranscriptSegment("Speaker 1", "there", 2.5, 4.0),
+    ]
+    merged = Diarizer._merge_consecutive_segments(segments)
+    assert len(merged) == 1
+    assert merged[0].text == "hello there"
+    assert merged[0].start_time == 0.0
+    assert merged[0].end_time == 4.0
+
+
+def test_merge_respects_gap_limit() -> None:
+    segments = [
+        TranscriptSegment("Speaker 1", "hello", 0.0, 2.0),
+        TranscriptSegment("Speaker 1", "again", 12.0, 14.0),  # 10 s gap
+    ]
+    merged = Diarizer._merge_consecutive_segments(segments, max_gap_sec=3.0)
+    assert len(merged) == 2
+    assert merged[1].start_time == 12.0
+
+
+def test_merge_respects_block_duration_cap() -> None:
+    # Contiguous same-speaker chain spanning 120 s must split at the cap.
+    segments = [
+        TranscriptSegment("Speaker 1", "part1", 0.0, 50.0),
+        TranscriptSegment("Speaker 1", "part2", 50.0, 80.0),
+        TranscriptSegment("Speaker 1", "part3", 80.0, 120.0),
+    ]
+    merged = Diarizer._merge_consecutive_segments(
+        segments, max_gap_sec=3.0, max_block_sec=90.0,
+    )
+    assert len(merged) == 2
+    assert merged[0].text == "part1 part2"
+    assert merged[0].end_time == 80.0
+    assert merged[1].start_time == 80.0
+
+
+def test_merge_never_joins_different_speakers() -> None:
+    segments = [
+        TranscriptSegment("Speaker 1", "question", 0.0, 2.0),
+        TranscriptSegment("Speaker 2", "answer", 2.0, 4.0),
+        TranscriptSegment("Speaker 1", "reply", 4.0, 6.0),
+    ]
+    merged = Diarizer._merge_consecutive_segments(segments)
+    assert len(merged) == 3
+
+
+def test_merge_concatenates_word_timings() -> None:
+    segments = [
+        TranscriptSegment("Speaker 1", "hello", 0.0, 1.0,
+                          words=[WordTiming("hello", 0.0, 1.0)]),
+        TranscriptSegment("Speaker 1", "there", 1.5, 2.5,
+                          words=[WordTiming("there", 1.5, 2.5)]),
+    ]
+    merged = Diarizer._merge_consecutive_segments(segments)
+    assert len(merged) == 1
+    assert [w.text for w in merged[0].words] == ["hello", "there"]
+
+
+def test_merge_handles_degenerate_end_times() -> None:
+    # Transcripts loaded from markdown can have end_time == start_time
+    # (or 0.0) — gap math must not merge across a huge span because of it.
+    segments = [
+        TranscriptSegment("Speaker 1", "early", 10.0, 0.0),
+        TranscriptSegment("Speaker 1", "late", 100.0, 102.0),
+    ]
+    merged = Diarizer._merge_consecutive_segments(segments, max_gap_sec=3.0)
+    assert len(merged) == 2

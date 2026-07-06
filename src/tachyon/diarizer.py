@@ -104,6 +104,10 @@ class DiarizeConfig:
         hf_token: HuggingFace token, required for pyannote backends only.
         audio_mode: Audio source — "auto", "system", or "mixed".
         audio_file: Optional WAV filename override within ``audio/`` for mixed mode.
+        merge_max_gap_sec: Maximum silence gap between consecutive same-speaker
+            segments that still allows them to be merged into one block.
+        merge_max_block_sec: Maximum duration of a merged block — longer
+            same-speaker stretches are split so timestamps stay periodic.
     """
 
     min_speakers: Optional[int] = None
@@ -113,6 +117,8 @@ class DiarizeConfig:
     hf_token: str = ""
     audio_mode: str = "auto"
     audio_file: Optional[str] = None
+    merge_max_gap_sec: float = 3.0
+    merge_max_block_sec: float = 90.0
 
 
 @dataclass
@@ -376,7 +382,11 @@ class Diarizer:
 
         # Step 7: Merge consecutive same-speaker segments
         self._report("Merging segments", 85)
-        merged = self._merge_consecutive_segments(relabeled)
+        merged = self._merge_consecutive_segments(
+            relabeled,
+            max_gap_sec=self._config.merge_max_gap_sec,
+            max_block_sec=self._config.merge_max_block_sec,
+        )
         logger.info(
             "Merged %d segments → %d segments",
             len(relabeled), len(merged),
@@ -1063,6 +1073,8 @@ class Diarizer:
     @staticmethod
     def _merge_consecutive_segments(
         segments: list[TranscriptSegment],
+        max_gap_sec: float = 3.0,
+        max_block_sec: float = 90.0,
     ) -> list[TranscriptSegment]:
         """Merge consecutive segments from the same speaker.
 
@@ -1070,6 +1082,11 @@ class Diarizer:
         they should be combined into a single block with the first
         segment's start_time, the last segment's end_time, and all
         text joined with a space.
+
+        Merging is bounded so a single block never hides timing detail:
+        segments separated by more than ``max_gap_sec`` of silence, or
+        whose combined span would exceed ``max_block_sec``, start a new
+        block instead of extending the current one.
         """
         if not segments:
             return []
@@ -1078,7 +1095,15 @@ class Diarizer:
         current = segments[0]
 
         for seg in segments[1:]:
-            if seg.speaker == current.speaker:
+            # max() guards degenerate segments where end_time <= start_time
+            # (e.g. transcripts loaded without end times).
+            gap = seg.start_time - max(current.end_time, current.start_time)
+            block_span = seg.end_time - current.start_time
+            if (
+                seg.speaker == current.speaker
+                and gap <= max_gap_sec
+                and block_span <= max_block_sec
+            ):
                 merged_words: Optional[list[WordTiming]] = None
                 if current.words or seg.words:
                     merged_words = list(current.words or [])
